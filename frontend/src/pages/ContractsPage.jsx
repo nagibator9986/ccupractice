@@ -36,13 +36,31 @@ export default function ContractsPage() {
     }
   }
 
-  useEffect(() => {
-    (async () => {
+  async function refreshRelations() {
+    try {
       const [p, s] = await Promise.all([partnersApi.list(), studentsApi.list()]);
       setPartners(p.items);
       setStudents(s.items);
-    })();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  useEffect(() => {
+    refreshRelations();
   }, []);
+
+  // Refetch partners + students every time the "New contract" modal opens so
+  // newly added entries from other pages appear in the dropdowns immediately.
+  function openNew() {
+    refreshRelations();
+    setCreating({
+      partner_id: "",
+      student_id: "",
+      contract_date: new Date().toISOString().slice(0, 10),
+      notes: "",
+    });
+  }
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -71,10 +89,7 @@ export default function ContractsPage() {
         description="Реестр трёхсторонних договоров профессиональной практики. Поиск и фильтрация по статусу, группе, специальности и дате."
         actions={
           isAdmin && (
-            <button
-              onClick={() => setCreating({ partner_id: "", student_id: "", contract_date: new Date().toISOString().slice(0, 10), notes: "" })}
-              className="btn-primary"
-            >
+            <button onClick={openNew} className="btn-primary">
               + Новый договор
             </button>
           )

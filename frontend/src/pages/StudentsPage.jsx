@@ -52,10 +52,26 @@ export default function StudentsPage() {
     }
   }
 
+  async function refreshPartners() {
+    try {
+      const p = await partnersApi.list();
+      setPartners(p.items);
+    } catch {
+      /* ignore — keep stale list */
+    }
+  }
+
   useEffect(() => {
     const t = setTimeout(load, 250);
     return () => clearTimeout(t);
   }, [q]);
+
+  // Refetch partners every time the edit modal opens so a partner added in
+  // another tab / page appears in the dropdown without a manual reload.
+  function openEditor(seed) {
+    setEditing(seed);
+    refreshPartners();
+  }
 
   async function onSave() {
     try {
@@ -93,7 +109,7 @@ export default function StudentsPage() {
         description="Студенты, направляемые на профессиональную практику, с привязкой к партнёрам."
         actions={
           isAdmin && (
-            <button onClick={() => setEditing({ ...EMPTY })} className="btn-primary">
+            <button onClick={() => openEditor({ ...EMPTY })} className="btn-primary">
               + Добавить студента
             </button>
           )
@@ -142,7 +158,7 @@ export default function StudentsPage() {
                   <td>{s.partner_name || "—"}</td>
                   {isAdmin && (
                     <td className="text-right">
-                      <button className="btn-ghost" onClick={() => setEditing({ ...EMPTY, ...s })}>Изм.</button>
+                      <button className="btn-ghost" onClick={() => openEditor({ ...EMPTY, ...s })}>Изм.</button>
                       <button className="btn-ghost text-red-600" onClick={() => onDelete(s)}>Удалить</button>
                     </td>
                   )}
