@@ -6,8 +6,24 @@ from flask import Flask, send_from_directory, jsonify, request
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from dotenv import load_dotenv
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 
 from .extensions import db, migrate
+
+
+# Enforce foreign-key constraints on every SQLite connection so dangling
+# references can't silently break referential integrity (Postgres does it
+# natively; SQLite needs the pragma per-connection).
+@event.listens_for(Engine, "connect")
+def _enable_sqlite_fk(dbapi_connection, _conn_record):
+    try:
+        if dbapi_connection.__class__.__module__.startswith("sqlite3"):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+    except Exception:
+        pass
 
 
 def _persistent_secret(name: str, instance_dir: Path) -> str:
@@ -80,7 +96,33 @@ def create_app() -> Flask:
 
     db.init_app(app)
     migrate.init_app(app, db)
-    JWTManager(app)
+
+    # ── JWT: normalise every auth-related failure to a JSON 401 so the SPA
+    # interceptor reliably redirects to /login instead of silently failing
+    # with "Ошибка сохранения" toasts (default Flask-JWT-Extended returns 422
+    # for malformed/invalid tokens which the SPA can't distinguish from
+    # business errors).
+    jwt = JWTManager(app)
+
+    @jwt.unauthorized_loader
+    def _unauthorized(reason):
+        return jsonify(error="Требуется авторизация", reason=reason), 401
+
+    @jwt.invalid_token_loader
+    def _invalid(reason):
+        return jsonify(error="Некорректный токен авторизации", reason=reason), 401
+
+    @jwt.expired_token_loader
+    def _expired(_jwt_header, _jwt_data):
+        return jsonify(error="Сессия истекла, войдите снова", code="token_expired"), 401
+
+    @jwt.revoked_token_loader
+    def _revoked(_jwt_header, _jwt_data):
+        return jsonify(error="Токен отозван", code="token_revoked"), 401
+
+    @jwt.needs_fresh_token_loader
+    def _needs_fresh(_jwt_header, _jwt_data):
+        return jsonify(error="Требуется свежая авторизация"), 401
 
     cors_origins = os.getenv("CORS_ORIGINS", "*")
     origins = [o.strip() for o in cors_origins.split(",") if o.strip()] or ["*"]

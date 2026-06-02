@@ -21,13 +21,17 @@ export default function SettingsPage() {
   }, []);
 
   async function onSave() {
+    if (!(data.name_ru || "").trim()) {
+      toast.error("Поле «Наименование (рус.)» обязательно");
+      return;
+    }
     setBusy(true);
     try {
       const { item } = await settingsApi.updateCollege(data);
       setData(item);
       toast.success("Настройки сохранены");
     } catch (e) {
-      toast.error(e.response?.data?.error || "Ошибка");
+      toast.error(e.response?.data?.error || "Не удалось сохранить настройки");
     } finally {
       setBusy(false);
     }
@@ -36,6 +40,11 @@ export default function SettingsPage() {
   async function onUpload(event) {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".docx")) {
+      toast.error("Допустимы только .docx файлы");
+      event.target.value = "";
+      return;
+    }
     setBusy(true);
     try {
       await settingsApi.uploadTemplate(file);
@@ -43,7 +52,7 @@ export default function SettingsPage() {
       setTemplateInfo(info);
       toast.success("Шаблон загружен");
     } catch (e) {
-      toast.error(e.response?.data?.error || "Ошибка");
+      toast.error(e.response?.data?.error || "Не удалось загрузить шаблон");
     } finally {
       setBusy(false);
       event.target.value = "";

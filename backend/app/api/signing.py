@@ -32,6 +32,7 @@ from ..models import (
 )
 from ..services.signature_service import parse_cms_signature, payload_sha256
 from ..utils.auth import admin_required
+from ..utils.serializers import get_json_safe
 from ..utils.time import utc_now
 
 bp = Blueprint("signing", __name__)
@@ -52,7 +53,7 @@ def invite(cid: int):
     if not contract.docx_path:
         return jsonify(error="Сначала сформируйте договор"), 400
 
-    data = request.get_json() or {}
+    data = get_json_safe()
     roles = data.get("roles") or ["partner", "student", "college"]
     custom: dict = data.get("recipients") or {}
 
@@ -261,7 +262,7 @@ def public_submit(token: str):
     if sr.status == "signed":
         return jsonify(error="Документ уже подписан по этой ссылке"), 409
 
-    data = request.get_json() or {}
+    data = get_json_safe()
     cms_b64 = (data.get("cms") or "").strip()
     if not cms_b64:
         return jsonify(error="Подпись не передана"), 400

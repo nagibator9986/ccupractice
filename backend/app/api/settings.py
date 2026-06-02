@@ -6,8 +6,16 @@ from werkzeug.utils import secure_filename
 from ..extensions import db
 from ..models import CollegeSettings
 from ..utils.auth import admin_required
+from ..utils.serializers import clean_str, get_json_safe
 
 bp = Blueprint("settings", __name__)
+
+_FIELD_LIMITS = {
+    "name_ru": 300, "name_kz": 300, "director_full_name": 200,
+    "director_basis": 200, "address": 300, "bin": 20, "iik": 40,
+    "bank_name": 200, "bank_address": 200, "bank_bik": 40,
+    "email": 160, "phone": 60, "city": 80, "contract_prefix": 10,
+}
 
 
 @bp.get("/college")
@@ -28,14 +36,13 @@ def update_settings():
     if not s:
         s = CollegeSettings()
         db.session.add(s)
-    data = request.get_json() or {}
-    for f in (
-        "name_ru", "name_kz", "director_full_name", "director_basis", "address",
-        "bin", "iik", "bank_name", "bank_address", "bank_bik", "email", "phone",
-        "city", "contract_prefix",
-    ):
-        if f in data and data[f] is not None:
-            setattr(s, f, str(data[f]).strip())
+    data = get_json_safe()
+    for field, max_len in _FIELD_LIMITS.items():
+        if field in data:
+            setattr(s, field, clean_str(data[field], max_len=max_len))
+    # Require at least a college name
+    if not s.name_ru:
+        return jsonify(error="Поле «Наименование (рус.)» обязательно"), 400
     db.session.commit()
     return jsonify(item=s.to_dict())
 
@@ -46,10 +53,15 @@ def upload_template():
     if "file" not in request.files:
         return jsonify(error="Файл не передан"), 400
     f = request.files["file"]
+    if not f or not f.filename:
+        return jsonify(error="Файл не передан"), 400
     if not f.filename.lower().endswith(".docx"):
         return jsonify(error="Допустимы только .docx файлы"), 400
     name = secure_filename(f.filename) or "contract_template.docx"
+    if not name.lower().endswith(".docx"):
+        name = name + ".docx"
     dest = Path(current_app.config["TEMPLATES_FOLDER"]) / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
     f.save(str(dest))
     s = CollegeSettings.query.first()
     if not s:

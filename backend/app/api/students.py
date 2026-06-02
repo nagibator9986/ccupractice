@@ -2,11 +2,37 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 from sqlalchemy import or_
 from ..extensions import db
-from ..models import Student
+from ..models import Student, Partner
 from ..utils.auth import admin_required
-from ..utils.serializers import parse_date, parse_int
+from ..utils.serializers import (
+    clean_str,
+    get_json_safe,
+    parse_date,
+    parse_int,
+    parse_positive_int,
+)
 
 bp = Blueprint("students", __name__)
+
+_TEXT_FIELDS = {
+    "full_name": 200,
+    "iin": 20,
+    "group_name": 60,
+    "specialty": 200,
+    "college_supervisor": 200,
+    "partner_supervisor": 200,
+    "id_card_number": 60,
+    "id_card_issued_by": 200,
+    "home_address": 300,
+    "phone": 60,
+    "legal_rep_full_name": 200,
+    "legal_rep_iin": 20,
+    "legal_rep_phone": 60,
+    "education_program": 300,
+    "specialty_code": 60,
+    "practice_type": 120,
+    "form_of_study": 60,
+}
 
 
 @bp.get("")
@@ -43,11 +69,21 @@ def get_student(sid):
 @bp.post("")
 @admin_required
 def create_student():
-    data = request.get_json() or {}
-    if not data.get("full_name"):
+    data = get_json_safe()
+    full_name = clean_str(data.get("full_name"), max_len=_TEXT_FIELDS["full_name"])
+    if not full_name:
         return jsonify(error="Укажите ФИО студента"), 400
-    student = Student()
-    _apply(student, data)
+
+    iin = clean_str(data.get("iin"), max_len=_TEXT_FIELDS["iin"])
+    if iin and not iin.isdigit():
+        return jsonify(error="ИИН должен содержать только цифры"), 400
+    if iin and len(iin) != 12:
+        return jsonify(error="ИИН должен состоять из 12 цифр"), 400
+
+    student = Student(full_name=full_name, iin=iin)
+    error = _apply(student, data, skip=("full_name", "iin"))
+    if error:
+        return jsonify(error=error), 400
     db.session.add(student)
     db.session.commit()
     return jsonify(item=student.to_dict()), 201
@@ -57,7 +93,22 @@ def create_student():
 @admin_required
 def update_student(sid):
     student = Student.query.get_or_404(sid)
-    _apply(student, request.get_json() or {})
+    data = get_json_safe()
+    if "full_name" in data:
+        full_name = clean_str(data.get("full_name"), max_len=_TEXT_FIELDS["full_name"])
+        if not full_name:
+            return jsonify(error="ФИО студента не может быть пустым"), 400
+        student.full_name = full_name
+    if "iin" in data:
+        iin = clean_str(data.get("iin"), max_len=_TEXT_FIELDS["iin"])
+        if iin and not iin.isdigit():
+            return jsonify(error="ИИН должен содержать только цифры"), 400
+        if iin and len(iin) != 12:
+            return jsonify(error="ИИН должен состоять из 12 цифр"), 400
+        student.iin = iin
+    error = _apply(student, data, skip=("full_name", "iin"))
+    if error:
+        return jsonify(error=error), 400
     db.session.commit()
     return jsonify(item=student.to_dict())
 
@@ -67,35 +118,44 @@ def update_student(sid):
 def delete_student(sid):
     student = Student.query.get_or_404(sid)
     if student.contracts:
-        return jsonify(error="Нельзя удалить студента с договорами"), 409
+        return jsonify(
+            error=f"Нельзя удалить студента — связаны {len(student.contracts)} договор(ов)."
+        ), 409
     db.session.delete(student)
     db.session.commit()
     return jsonify(ok=True)
 
 
-def _apply(student: Student, data: dict) -> None:
-    text_fields = (
-        "full_name", "iin", "group_name", "specialty",
-        "college_supervisor", "partner_supervisor",
-        "id_card_number", "id_card_issued_by", "home_address", "phone",
-        "legal_rep_full_name", "legal_rep_iin", "legal_rep_phone",
-        "education_program", "specialty_code", "practice_type", "form_of_study",
-        "notes",
-    )
-    for f in text_fields:
-        if f in data:
-            value = data.get(f)
-            setattr(student, f, value.strip() if isinstance(value, str) else value)
+def _apply(student: Student, data: dict, *, skip=()) -> str | None:
+    """Apply fields. Returns an error string when validation fails."""
+    for field, max_len in _TEXT_FIELDS.items():
+        if field in skip or field not in data:
+            continue
+        setattr(student, field, clean_str(data.get(field), max_len=max_len))
 
+    # Numeric / date fields
     if "course" in data:
-        student.course = parse_int(data["course"])
-    if "partner_id" in data:
-        student.partner_id = parse_int(data["partner_id"])
+        student.course = parse_positive_int(data["course"], minimum=1, default=None)
     if "enrollment_year" in data:
-        student.enrollment_year = parse_int(data["enrollment_year"])
+        student.enrollment_year = parse_positive_int(data["enrollment_year"], minimum=1900, default=None)
     if "practice_start" in data:
         student.practice_start = parse_date(data["practice_start"])
     if "practice_end" in data:
         student.practice_end = parse_date(data["practice_end"])
     if "birth_date" in data:
         student.birth_date = parse_date(data["birth_date"])
+    if "notes" in data:
+        student.notes = clean_str(data.get("notes"))
+
+    # FK validation: partner_id must reference an existing partner.
+    if "partner_id" in data:
+        pid = parse_int(data["partner_id"])
+        if pid is not None:
+            if not Partner.query.get(pid):
+                return f"Партнёр с id={pid} не найден"
+        student.partner_id = pid
+
+    # Date sanity: practice_end must not be before practice_start.
+    if student.practice_start and student.practice_end and student.practice_end < student.practice_start:
+        return "Окончание практики не может быть раньше начала"
+    return None

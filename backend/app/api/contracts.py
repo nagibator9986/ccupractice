@@ -11,7 +11,7 @@ from ..services.numbering import next_contract_number
 from ..services.signature_report import build_signature_report
 from ..utils.auth import admin_required
 from ..utils.files import safe_filename
-from ..utils.serializers import parse_date, parse_int
+from ..utils.serializers import clean_str, get_json_safe, parse_date, parse_int
 from ..utils.time import utc_now
 
 bp = Blueprint("contracts", __name__)
@@ -64,16 +64,20 @@ def get_contract(cid):
 @bp.post("")
 @admin_required
 def create_contract():
-    data = request.get_json() or {}
+    data = get_json_safe()
     partner_id = parse_int(data.get("partner_id"))
     student_id = parse_int(data.get("student_id"))
-    if not partner_id or not student_id:
-        return jsonify(error="Укажите партнера и студента"), 400
+    if not partner_id:
+        return jsonify(error="Укажите партнёра"), 400
+    if not student_id:
+        return jsonify(error="Укажите студента"), 400
 
     partner = Partner.query.get(partner_id)
+    if not partner:
+        return jsonify(error=f"Партнёр с id={partner_id} не найден"), 404
     student = Student.query.get(student_id)
-    if not partner or not student:
-        return jsonify(error="Партнёр или студент не найдены"), 404
+    if not student:
+        return jsonify(error=f"Студент с id={student_id} не найден"), 404
 
     contract_date = parse_date(data.get("contract_date")) or date.today()
     number, year, _ = next_contract_number(contract_date.year)
@@ -85,7 +89,7 @@ def create_contract():
         partner_id=partner.id,
         student_id=student.id,
         status=ContractStatus.DRAFT,
-        notes=(data.get("notes") or "").strip() or None,
+        notes=clean_str(data.get("notes")),
     )
     db.session.add(contract)
     db.session.commit()
@@ -96,13 +100,18 @@ def create_contract():
 @admin_required
 def update_contract(cid):
     contract = Contract.query.get_or_404(cid)
-    data = request.get_json() or {}
-    if "status" in data and data["status"] in ContractStatus.ALL:
-        contract.status = data["status"]
+    data = get_json_safe()
+    if "status" in data:
+        new_status = data["status"]
+        if new_status not in ContractStatus.ALL:
+            return jsonify(error=f"Неизвестный статус: {new_status}"), 400
+        contract.status = new_status
     if "notes" in data:
-        contract.notes = (data["notes"] or "").strip() or None
+        contract.notes = clean_str(data.get("notes"))
     if "contract_date" in data:
-        contract.contract_date = parse_date(data["contract_date"]) or contract.contract_date
+        new_date = parse_date(data["contract_date"])
+        if new_date:
+            contract.contract_date = new_date
     db.session.commit()
     return jsonify(item=contract.to_dict(include_relations=True))
 
@@ -151,7 +160,11 @@ def upload_scan(cid):
     if "file" not in request.files:
         return jsonify(error="Файл не передан"), 400
     f = request.files["file"]
-    ext = (f.filename.rsplit(".", 1)[-1] or "").lower() if "." in f.filename else ""
+    if not f or not f.filename:
+        return jsonify(error="Файл не передан"), 400
+    if "." not in f.filename:
+        return jsonify(error="Допустимы PDF, JPG, PNG"), 400
+    ext = f.filename.rsplit(".", 1)[-1].lower()
     if ext not in _ALLOWED_SCAN_EXT:
         return jsonify(error="Допустимы PDF, JPG, PNG"), 400
 

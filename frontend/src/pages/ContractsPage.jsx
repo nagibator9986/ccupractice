@@ -72,13 +72,21 @@ export default function ContractsPage() {
   }, [filters]); // eslint-disable-line
 
   async function createContract() {
+    if (!creating.partner_id) {
+      toast.error("Выберите партнёра");
+      return;
+    }
+    if (!creating.student_id) {
+      toast.error("Выберите студента");
+      return;
+    }
     try {
       const data = await contractsApi.create(creating);
       toast.success(`Договор ${data.item.number} создан`);
       setCreating(null);
       load();
     } catch (e) {
-      toast.error(e.response?.data?.error || "Ошибка создания");
+      toast.error(e.response?.data?.error || "Не удалось создать договор");
     }
   }
 

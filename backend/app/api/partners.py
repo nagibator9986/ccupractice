@@ -2,11 +2,35 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 from sqlalchemy import or_
 from ..extensions import db
-from ..models import Partner
+from ..models import Partner, Student
 from ..utils.auth import admin_required
-from ..utils.serializers import parse_date, parse_int
+from ..utils.serializers import (
+    clean_str,
+    get_json_safe,
+    parse_date,
+    parse_positive_int,
+)
 
 bp = Blueprint("partners", __name__)
+
+# Text fields with their max DB lengths from the model.
+_TEXT_FIELDS = {
+    "organization_name": 300,
+    "bin": 20,
+    "legal_address": 500,
+    "actual_address": 500,
+    "director_full_name": 200,
+    "director_position": 200,
+    "director_basis": 300,
+    "contact_person": 200,
+    "phone": 60,
+    "email": 160,
+    "specialty": 200,
+    "contract_status": 40,
+    "bank_name": 200,
+    "bank_bik": 40,
+    "bank_iik": 50,
+}
 
 
 @bp.get("")
@@ -38,11 +62,18 @@ def get_partner(pid):
 @bp.post("")
 @admin_required
 def create_partner():
-    data = request.get_json() or {}
-    if not data.get("organization_name"):
+    data = get_json_safe()
+    name = clean_str(data.get("organization_name"), max_len=_TEXT_FIELDS["organization_name"])
+    if not name:
         return jsonify(error="Укажите наименование организации"), 400
-    partner = Partner()
-    _apply(partner, data)
+
+    # Optional uniqueness check on BIN to prevent accidental duplicates.
+    bin_value = clean_str(data.get("bin"), max_len=_TEXT_FIELDS["bin"])
+    if bin_value and Partner.query.filter_by(bin=bin_value).first():
+        return jsonify(error=f"Партнёр с БИН {bin_value} уже существует"), 409
+
+    partner = Partner(organization_name=name, bin=bin_value)
+    _apply(partner, data, skip=("organization_name", "bin"))
     db.session.add(partner)
     db.session.commit()
     return jsonify(item=partner.to_dict()), 201
@@ -52,7 +83,20 @@ def create_partner():
 @admin_required
 def update_partner(pid):
     partner = Partner.query.get_or_404(pid)
-    _apply(partner, request.get_json() or {})
+    data = get_json_safe()
+    if "organization_name" in data:
+        name = clean_str(data.get("organization_name"), max_len=_TEXT_FIELDS["organization_name"])
+        if not name:
+            return jsonify(error="Наименование организации не может быть пустым"), 400
+        partner.organization_name = name
+    if "bin" in data:
+        bin_value = clean_str(data.get("bin"), max_len=_TEXT_FIELDS["bin"])
+        if bin_value:
+            dup = Partner.query.filter_by(bin=bin_value).filter(Partner.id != pid).first()
+            if dup:
+                return jsonify(error=f"Партнёр с БИН {bin_value} уже существует"), 409
+        partner.bin = bin_value
+    _apply(partner, data, skip=("organization_name", "bin"))
     db.session.commit()
     return jsonify(item=partner.to_dict())
 
@@ -62,23 +106,29 @@ def update_partner(pid):
 def delete_partner(pid):
     partner = Partner.query.get_or_404(pid)
     if partner.contracts:
-        return jsonify(error="Нельзя удалить партнера с договорами"), 409
+        return jsonify(
+            error=f"Нельзя удалить партнёра — связаны {len(partner.contracts)} договор(ов). Сначала удалите или переназначьте их."
+        ), 409
+    # Block deletion if students reference this partner — otherwise SQLAlchemy
+    # nullifies their partner_id and we lose the link silently.
+    students_count = Student.query.filter_by(partner_id=pid).count()
+    if students_count:
+        return jsonify(
+            error=f"Нельзя удалить партнёра — у него {students_count} студент(ов). Сначала переназначьте студентов другому партнёру."
+        ), 409
     db.session.delete(partner)
     db.session.commit()
     return jsonify(ok=True)
 
 
-def _apply(partner: Partner, data: dict) -> None:
-    fields = (
-        "organization_name", "bin", "legal_address", "actual_address",
-        "director_full_name", "director_position", "director_basis",
-        "contact_person", "phone", "email", "specialty", "contract_status",
-        "bank_name", "bank_bik", "bank_iik", "notes",
-    )
-    for f in fields:
-        if f in data:
-            setattr(partner, f, (data.get(f) or "").strip() if isinstance(data.get(f), str) else data.get(f))
+def _apply(partner: Partner, data: dict, *, skip=()) -> None:
+    for field, max_len in _TEXT_FIELDS.items():
+        if field in skip or field not in data:
+            continue
+        setattr(partner, field, clean_str(data.get(field), max_len=max_len))
     if "seats_count" in data:
-        partner.seats_count = parse_int(data["seats_count"]) or 0
+        partner.seats_count = parse_positive_int(data["seats_count"], minimum=0, default=0)
     if "contract_valid_until" in data:
         partner.contract_valid_until = parse_date(data["contract_valid_until"])
+    if "notes" in data:
+        partner.notes = clean_str(data.get("notes"))

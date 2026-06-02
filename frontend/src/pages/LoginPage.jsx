@@ -17,13 +17,26 @@ export default function LoginPage() {
 
   async function onSubmit(e) {
     e.preventDefault();
+    const trimmed = email.trim();
+    if (!trimmed || !password) {
+      toast.error("Введите email и пароль");
+      return;
+    }
     setLoading(true);
     try {
-      await login(email.trim(), password);
+      await login(trimmed, password);
       toast.success("Добро пожаловать!");
       navigate("/", { replace: true });
     } catch (err) {
-      toast.error(err.response?.data?.error || "Ошибка входа");
+      const status = err.response?.status;
+      const msg = err.response?.data?.error;
+      if (!err.response) {
+        toast.error("Не удалось связаться с сервером");
+      } else if (status === 401) {
+        toast.error(msg || "Неверные учётные данные");
+      } else {
+        toast.error(msg || "Ошибка входа");
+      }
     } finally {
       setLoading(false);
     }

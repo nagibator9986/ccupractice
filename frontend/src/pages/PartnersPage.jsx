@@ -50,6 +50,15 @@ export default function PartnersPage() {
   }, [q]);
 
   async function onSave() {
+    const name = (editing.organization_name || "").trim();
+    if (!name) {
+      toast.error("Укажите наименование организации");
+      return;
+    }
+    if (editing.bin && !/^\d{12}$/.test(editing.bin.trim())) {
+      toast.error("БИН должен состоять из 12 цифр");
+      return;
+    }
     try {
       if (editing.id) {
         await partnersApi.update(editing.id, editing);
@@ -61,7 +70,7 @@ export default function PartnersPage() {
       setEditing(null);
       load();
     } catch (e) {
-      toast.error(e.response?.data?.error || "Ошибка сохранения");
+      toast.error(e.response?.data?.error || "Не удалось сохранить партнёра");
     }
   }
 

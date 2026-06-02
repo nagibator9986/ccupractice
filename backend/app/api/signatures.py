@@ -6,6 +6,7 @@ from ..extensions import db
 from ..models import Contract, ContractStatus, Signature
 from ..services.signature_service import parse_cms_signature, payload_sha256
 from ..utils.auth import admin_required
+from ..utils.serializers import get_json_safe
 
 bp = Blueprint("signatures", __name__)
 
@@ -35,7 +36,7 @@ def payload_hash(cid):
 def attach_signature(cid):
     """Persist an NCALayer-produced CMS signature for the contract."""
     contract = Contract.query.get_or_404(cid)
-    data = request.get_json() or {}
+    data = get_json_safe()
     cms_b64 = (data.get("cms") or "").strip()
     signer_role = (data.get("signer_role") or "").strip()
     if not cms_b64 or signer_role not in ("college", "partner", "student"):

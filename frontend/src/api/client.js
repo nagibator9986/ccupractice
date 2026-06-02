@@ -23,13 +23,23 @@ client.interceptors.request.use((config) => {
   return config;
 });
 
+// Paths that NEVER trigger an auto-logout even on 401 (public signing flow
+// is intentionally token-based and lives outside the auth-protected area).
+const PUBLIC_PATHS = ["/signing/public/", "/auth/login"];
+
 client.interceptors.response.use(
   (r) => r,
   (error) => {
-    if (error.response?.status === 401) {
+    const status = error.response?.status;
+    const url = error.config?.url || "";
+    const isPublic = PUBLIC_PATHS.some((p) => url.includes(p));
+    // Treat 401 (and 422 from misconfigured JWT setups) on protected routes
+    // as a session-expired signal — clear creds and bounce to /login.
+    if (!isPublic && (status === 401 || status === 422)) {
+      const wasLoggedIn = !!localStorage.getItem("ccu_token");
       localStorage.removeItem("ccu_token");
       localStorage.removeItem("ccu_user");
-      if (!window.location.pathname.endsWith("/login")) {
+      if (wasLoggedIn && !window.location.pathname.endsWith("/login")) {
         window.location.replace("/login");
       }
     }

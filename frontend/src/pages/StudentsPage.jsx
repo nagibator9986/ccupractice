@@ -74,6 +74,19 @@ export default function StudentsPage() {
   }
 
   async function onSave() {
+    const name = (editing.full_name || "").trim();
+    if (!name) {
+      toast.error("Укажите ФИО студента");
+      return;
+    }
+    if (editing.iin && !/^\d{12}$/.test(String(editing.iin).trim())) {
+      toast.error("ИИН должен состоять из 12 цифр");
+      return;
+    }
+    if (editing.practice_start && editing.practice_end && editing.practice_end < editing.practice_start) {
+      toast.error("Окончание практики не может быть раньше начала");
+      return;
+    }
     try {
       const payload = { ...editing };
       if (payload.partner_id === "") payload.partner_id = null;
@@ -87,7 +100,7 @@ export default function StudentsPage() {
       setEditing(null);
       load();
     } catch (e) {
-      toast.error(e.response?.data?.error || "Ошибка сохранения");
+      toast.error(e.response?.data?.error || "Не удалось сохранить студента");
     }
   }
 
