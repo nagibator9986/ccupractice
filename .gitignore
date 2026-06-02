@@ -1,0 +1,24 @@
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/instance/*.db
+backend/instance/.secret_key
+backend/instance/.jwt_secret_key
+backend/archive/
+backend/uploads/
+backend/.env
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.env
+frontend/.env.local
+
+# OS
+.DS_Store
+
+# Local Docker artifacts
+*.pid

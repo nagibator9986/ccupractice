@@ -1,0 +1,119 @@
+import client from "./client";
+
+// Mirror of client.js — used for raw <a href> download URLs.
+const API_PREFIX = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "") + "/api";
+
+export const authApi = {
+  login: (email, password) => client.post("/auth/login", { email, password }).then((r) => r.data),
+  me: () => client.get("/auth/me").then((r) => r.data),
+  changePassword: (payload) =>
+    client.post("/auth/change-password", payload).then((r) => r.data),
+};
+
+export const partnersApi = {
+  list: (params) => client.get("/partners", { params }).then((r) => r.data),
+  get: (id) => client.get(`/partners/${id}`).then((r) => r.data),
+  create: (data) => client.post("/partners", data).then((r) => r.data),
+  update: (id, data) => client.put(`/partners/${id}`, data).then((r) => r.data),
+  remove: (id) => client.delete(`/partners/${id}`).then((r) => r.data),
+};
+
+export const studentsApi = {
+  list: (params) => client.get("/students", { params }).then((r) => r.data),
+  get: (id) => client.get(`/students/${id}`).then((r) => r.data),
+  create: (data) => client.post("/students", data).then((r) => r.data),
+  update: (id, data) => client.put(`/students/${id}`, data).then((r) => r.data),
+  remove: (id) => client.delete(`/students/${id}`).then((r) => r.data),
+};
+
+export const contractsApi = {
+  list: (params) => client.get("/contracts", { params }).then((r) => r.data),
+  get: (id) => client.get(`/contracts/${id}`).then((r) => r.data),
+  create: (data) => client.post("/contracts", data).then((r) => r.data),
+  update: (id, data) => client.put(`/contracts/${id}`, data).then((r) => r.data),
+  remove: (id) => client.delete(`/contracts/${id}`).then((r) => r.data),
+  generate: (id) => client.post(`/contracts/${id}/generate`).then((r) => r.data),
+  uploadScan: (id, file) => {
+    const form = new FormData();
+    form.append("file", file);
+    return client
+      .post(`/contracts/${id}/upload-scan`, form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+      .then((r) => r.data);
+  },
+  downloadUrl: (id, fmt) => `${API_PREFIX}/contracts/${id}/download/${fmt}`,
+  download: async (id, fmt, filename) => {
+    const res = await client.get(`/contracts/${id}/download/${fmt}`, {
+      responseType: "blob",
+    });
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename || `contract_${id}.${fmt}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  },
+  signatureReport: async (id, number) => {
+    const res = await client.get(`/contracts/${id}/signature-report/download`, {
+      responseType: "blob",
+    });
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Отчёт_подписания_${number || id}.docx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  },
+};
+
+export const archiveApi = {
+  list: (params) => client.get("/archive", { params }).then((r) => r.data),
+  tree: () => client.get("/archive/tree").then((r) => r.data),
+};
+
+export const settingsApi = {
+  getCollege: () => client.get("/settings/college").then((r) => r.data),
+  updateCollege: (data) => client.put("/settings/college", data).then((r) => r.data),
+  uploadTemplate: (file) => {
+    const form = new FormData();
+    form.append("file", file);
+    return client
+      .post("/settings/template", form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+      .then((r) => r.data);
+  },
+  templateInfo: () => client.get("/settings/template/info").then((r) => r.data),
+};
+
+export const signingApi = {
+  invite: (contractId, payload) =>
+    client.post(`/signing/contracts/${contractId}/invite`, payload).then((r) => r.data),
+  listRequests: (contractId) =>
+    client.get(`/signing/contracts/${contractId}/requests`).then((r) => r.data),
+  revoke: (requestId) =>
+    client.post(`/signing/requests/${requestId}/revoke`).then((r) => r.data),
+  resend: (requestId) =>
+    client.post(`/signing/requests/${requestId}/resend`).then((r) => r.data),
+  publicView: (token) =>
+    client.get(`/signing/public/${token}`).then((r) => r.data),
+  publicPayload: (token) =>
+    client.get(`/signing/public/${token}/payload`).then((r) => r.data),
+  publicSubmit: (token, cms) =>
+    client.post(`/signing/public/${token}/submit`, { cms }).then((r) => r.data),
+  publicDownloadUrl: (token, fmt) => `${API_PREFIX}/signing/public/${token}/download/${fmt}`,
+};
+
+export const signaturesApi = {
+  payloadHash: (contractId) =>
+    client.get(`/signatures/contracts/${contractId}/payload-hash`).then((r) => r.data),
+  attach: (contractId, payload) =>
+    client.post(`/signatures/contracts/${contractId}/attach`, payload).then((r) => r.data),
+  list: (contractId) =>
+    client.get(`/signatures/contracts/${contractId}`).then((r) => r.data),
+};

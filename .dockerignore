@@ -1,0 +1,41 @@
+# VCS
+.git
+.gitignore
+
+# Editor / OS
+.DS_Store
+.vscode
+.idea
+
+# Python
+**/.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.egg-info
+backend/.env
+backend/instance/*.db
+backend/instance/.secret_key
+backend/instance/.jwt_secret_key
+backend/archive
+backend/uploads
+
+# Node
+frontend/node_modules
+frontend/dist
+frontend/.vite
+frontend/.env
+frontend/.env.local
+
+# Docs / archives
+docs
+*.zip
+*.7z
+*.docx
+*.pdf
+
+# Test outputs
+.pytest_cache
+coverage
+.coverage
+htmlcov
