@@ -7,6 +7,12 @@ class Signature(db.Model):
     """Electronic signature attached to a contract via NCALayer (ЭЦП)."""
 
     __tablename__ = "signatures"
+    __table_args__ = (
+        # One signature per (contract, role). Concurrent attempts to attach a
+        # second signature for the same role collapse into an IntegrityError
+        # which we catch in the signing endpoint.
+        db.UniqueConstraint("contract_id", "signer_role", name="uq_signature_contract_role"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     contract_id = db.Column(

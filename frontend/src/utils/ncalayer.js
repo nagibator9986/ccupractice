@@ -1,19 +1,22 @@
 /**
- * Thin wrapper around the NCALayer WebSocket API
- * (kz.gov.pki.knca.basics, recommended in SDK 2.0 README).
+ * Wrapper around the NCALayer WebSocket API (`kz.gov.pki.knca.basics`).
  *
- * NCALayer is a desktop application provided by the Kazakh National
- * Certifying Authority (NCA). It exposes a local WebSocket server on
- * ws://127.0.0.1:13579 (or wss://127.0.0.1:13579 if NCALayer is set up
- * with TLS). The frontend sends a JSON-RPC-style "signXmlByKeyInfo" or
- * "createCMSSignatureFromBase64" message and receives the CMS payload.
+ * NCALayer is the desktop app provided by НУЦ РК. It exposes a local
+ * WebSocket server on `wss://127.0.0.1:13579` (newer builds) or
+ * `ws://127.0.0.1:13579` (legacy). We try both.
  *
- * The user must have NCALayer installed and running; otherwise we
- * return a descriptive error so the UI can guide them.
+ * Response envelopes seen across NCALayer versions:
+ *   { status: true, body: { result: ["MIIK…"] } }      // success — array
+ *   { status: true, body: { result: "MIIK…" } }        // success — string
+ *   { status: true, responseObject: "MIIK…" }          // older success shape
+ *   { status: false, code: "USER_CANCELED", message } // user clicked Cancel
+ *   { status: false, message: "..." }                  // generic failure
  */
 
 const NCALAYER_URLS = ["wss://127.0.0.1:13579/", "ws://127.0.0.1:13579/"];
-const STORAGE_KEYS = ["PKCS12", "AKKZIDCARD", "AKKZTOKEN"];
+
+const CONNECT_TIMEOUT_MS = 4000;
+const SIGN_TIMEOUT_MS = 5 * 60 * 1000; // 5 min — covers PIN entry / token confirmation
 
 function openSocket() {
   return new Promise((resolve, reject) => {
@@ -30,82 +33,135 @@ function openSocket() {
         return;
       }
       const url = NCALAYER_URLS[idx++];
+      let ws;
       try {
-        const ws = new WebSocket(url);
-        const timer = setTimeout(() => {
-          try {
-            ws.close();
-          } catch {}
-          lastError = new Error(`Timeout NCALayer at ${url}`);
-          tryNext();
-        }, 4000);
-        ws.onopen = () => {
-          clearTimeout(timer);
-          resolve(ws);
-        };
-        ws.onerror = (e) => {
-          clearTimeout(timer);
-          lastError = new Error(`NCALayer недоступен по ${url}`);
-          try {
-            ws.close();
-          } catch {}
-          tryNext();
-        };
+        ws = new WebSocket(url);
       } catch (e) {
         lastError = e;
         tryNext();
+        return;
       }
+      const timer = setTimeout(() => {
+        try { ws.close(); } catch {}
+        lastError = new Error(`Timeout NCALayer at ${url}`);
+        tryNext();
+      }, CONNECT_TIMEOUT_MS);
+      ws.onopen = () => {
+        clearTimeout(timer);
+        resolve(ws);
+      };
+      ws.onerror = () => {
+        clearTimeout(timer);
+        lastError = new Error(`NCALayer недоступен по ${url}`);
+        try { ws.close(); } catch {}
+        tryNext();
+      };
     };
     tryNext();
   });
 }
 
+function extractCms(data) {
+  // Handles every shape we've observed across NCALayer versions.
+  if (!data || typeof data !== "object") return null;
+  const candidates = [
+    data.responseObject,
+    data?.result?.cms,
+    Array.isArray(data?.body?.result) ? data.body.result[0] : data?.body?.result,
+    data?.body,
+    data?.result,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.length > 64) return c;
+  }
+  return null;
+}
+
+function extractError(data) {
+  return (
+    data?.message ||
+    data?.body?.message ||
+    data?.errorMessage ||
+    (data?.code ? `NCALayer: ${data.code}` : null) ||
+    "NCALayer отклонил запрос"
+  );
+}
+
 /**
- * Sign a base64 payload with the user's signing certificate (RSA/GOST).
- * Returns the CMS (base64) ready to be sent to backend.
+ * Sign a base64 payload with the user's signing certificate (RSA / ECDSA / GOST).
+ * Returns the base64-encoded CMS ready to be sent to backend.
+ *
+ * options.attachData (default true) — wraps the data into the CMS structure.
+ * options.signalAbort — AbortSignal to cancel a hanging request.
  */
-export async function signBase64WithNCALayer(payloadBase64, { attachData = true } = {}) {
+export async function signBase64WithNCALayer(payloadBase64, options = {}) {
+  const { attachData = true, signal } = options;
   const ws = await openSocket();
+
   return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = (fn, value) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { ws.close(); } catch {}
+      fn(value);
+    };
+
+    const timer = setTimeout(() => {
+      finish(reject, new Error(
+        "Истекло время ожидания ответа от NCALayer. Откройте приложение и подтвердите подписание."
+      ));
+    }, SIGN_TIMEOUT_MS);
+
+    if (signal) {
+      const onAbort = () => finish(reject, new Error("Подписание отменено"));
+      if (signal.aborted) return onAbort();
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
     ws.onmessage = (event) => {
       let data;
       try {
         data = JSON.parse(event.data);
-      } catch (e) {
-        ws.close();
-        reject(new Error("Некорректный ответ от NCALayer"));
-        return;
+      } catch {
+        return finish(reject, new Error("Некорректный ответ от NCALayer"));
       }
-      // Common response shape from kz.gov.pki.knca.basics
-      if (data?.status === false || data?.result === false) {
-        ws.close();
-        reject(new Error(data?.message || "NCALayer отклонил запрос или отменено пользователем"));
-        return;
+      // Failure envelope
+      if (data?.status === false || data?.result === false || data?.errorCode || data?.errorMessage) {
+        return finish(reject, new Error(extractError(data)));
       }
-      const cms =
-        data?.responseObject ||
-        data?.result?.cms ||
-        data?.body?.result?.[0] ||
-        data?.body?.result ||
-        data?.result;
-      ws.close();
-      if (typeof cms === "string" && cms.length > 64) {
-        resolve(cms);
-      } else {
-        reject(new Error("NCALayer не вернул CMS-подпись"));
+      const cms = extractCms(data);
+      if (cms) return finish(resolve, cms);
+      finish(reject, new Error("NCALayer не вернул CMS-подпись"));
+    };
+    ws.onerror = () => finish(reject, new Error("Ошибка WebSocket NCALayer"));
+    ws.onclose = (ev) => {
+      if (!done && ev.code !== 1000) {
+        finish(reject, new Error("NCALayer закрыл соединение"));
       }
     };
-    ws.onerror = () => reject(new Error("Ошибка WebSocket NCALayer"));
 
+    // Don't restrict by extKeyUsage — different NCA cert profiles use slightly
+    // different EKUs and a wrong filter would hide the user's only signing
+    // cert. NCALayer will still show only certs available in the chosen
+    // storage. The user picks; we trust their choice and verify on the backend.
     const request = {
       module: "kz.gov.pki.knca.basics",
       method: "sign",
       args: {
-        allowedStorages: STORAGE_KEYS,
+        // Empty array = allow all known storages (PKCS12, ID card, JaCarta…).
+        allowedStorages: [],
         format: "cms",
         data: payloadBase64,
-        signingParams: { decode: "base64", encapsulate: attachData, digested: false, tsa: false },
-        signerParams: { extKeyUsageOids: ["1.3.6.1.5.5.7.3.2", "1.3.6.1.5.5.7.3.4"] },
+        signingParams: {
+          decode: "base64",
+          encapsulate: attachData,
+          digested: false,
+          tsa: false,
+        },
+        // No extKeyUsage filter — let user choose any of their certs.
+        signerParams: {},
         locale: "ru",
       },
     };

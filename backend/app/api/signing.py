@@ -15,22 +15,24 @@ Public endpoints (token-based, no JWT required):
 from __future__ import annotations
 
 import base64
-from datetime import datetime
 from pathlib import Path
 
 from flask import Blueprint, current_app, jsonify, request, send_from_directory
+from sqlalchemy.exc import IntegrityError
 
 from ..extensions import db
 from ..models import (
+    CollegeSettings,
     Contract,
     ContractStatus,
-    Partner,
     Signature,
     SigningRequest,
-    Student,
-    CollegeSettings,
 )
-from ..services.signature_service import parse_cms_signature, payload_sha256
+from ..services.signature_service import (
+    SignatureError,
+    parse_cms_signature,
+    payload_sha256,
+)
 from ..utils.auth import admin_required
 from ..utils.serializers import get_json_safe
 from ..utils.time import utc_now
@@ -40,6 +42,22 @@ bp = Blueprint("signing", __name__)
 
 def _public_base() -> str:
     return request.headers.get("X-Public-Origin") or request.host_url.rstrip("/")
+
+
+ROLE_LABELS = {
+    "college": "Колледж (организация образования)",
+    "partner": "Предприятие",
+    "student": "Обучающийся",
+}
+ALLOWED_ROLES = ("college", "partner", "student")
+
+
+def _normalize_iin(value: str | None) -> str:
+    """Strip IIN/BIN prefix + non-digits so we can compare two raw forms."""
+    if not value:
+        return ""
+    s = str(value).replace("IIN", "").replace("BIN", "").strip()
+    return "".join(ch for ch in s if ch.isdigit())
 
 
 # ────────────────────────────────────────────────────────────────
@@ -54,24 +72,40 @@ def invite(cid: int):
         return jsonify(error="Сначала сформируйте договор"), 400
 
     data = get_json_safe()
-    roles = data.get("roles") or ["partner", "student", "college"]
-    custom: dict = data.get("recipients") or {}
+    # Use `is None` semantics so an explicit empty list doesn't fall back to all roles.
+    requested_roles = data.get("roles")
+    if requested_roles is None:
+        requested_roles = list(ALLOWED_ROLES)
+    elif not isinstance(requested_roles, list):
+        return jsonify(error="Поле roles должно быть массивом"), 400
 
-    # Auto-derive contact details from contract relations.
+    custom: dict = data.get("recipients") or {}
+    force = bool(data.get("force"))
+
     defaults = _default_recipients(contract)
 
+    # Pre-compute which roles already have a completed Signature so we can
+    # refuse to issue a new invite for them (otherwise a single role could be
+    # signed twice via two consecutive invites).
+    signed_roles = {
+        s.signer_role for s in contract.signatures or []
+    }
+
     created = []
-    for role in roles:
-        if role not in ("college", "partner", "student"):
+    for role in requested_roles:
+        if role not in ALLOWED_ROLES:
             continue
+        if role in signed_roles and not force:
+            continue
+
         active = SigningRequest.query.filter_by(contract_id=cid, signer_role=role).filter(
             SigningRequest.status.in_(("pending", "viewed"))
         ).first()
         if active:
-            if not data.get("force"):
+            if not force:
                 continue
-            # When forcing, revoke the previous link so the old token can't
-            # be used to submit a second signature.
+            # Revoke the previous link so the old token can't be used after we
+            # issue a fresh one.
             active.status = "revoked"
             active.revoked_at = utc_now()
 
@@ -107,6 +141,8 @@ def revoke(rid: int):
     sr = SigningRequest.query.get_or_404(rid)
     if sr.status == "signed":
         return jsonify(error="Подписанный запрос отозвать нельзя"), 409
+    if sr.status == "revoked":
+        return jsonify(error="Ссылка уже отозвана"), 409
     sr.status = "revoked"
     sr.revoked_at = utc_now()
     db.session.commit()
@@ -123,6 +159,9 @@ def resend(rid: int):
     sr.status = "pending"
     sr.viewed_at = None
     sr.revoked_at = None
+    # Reset expiration so the resent link has a full TTL window.
+    from datetime import timedelta
+    sr.expires_at = utc_now() + timedelta(days=30)
     db.session.commit()
     return jsonify(item=sr.to_dict(include_token=True, public_base_url=_public_base()))
 
@@ -130,13 +169,6 @@ def resend(rid: int):
 # ────────────────────────────────────────────────────────────────
 # Public (token-based)
 # ────────────────────────────────────────────────────────────────
-
-ROLE_LABELS = {
-    "college": "Колледж (организация образования)",
-    "partner": "Предприятие",
-    "student": "Обучающийся",
-}
-
 
 def _get_request(token: str) -> SigningRequest | None:
     return SigningRequest.query.filter_by(token=token).first()
@@ -157,19 +189,19 @@ def _public_contract_payload(contract: Contract) -> dict:
             "director_full_name": settings.director_full_name if settings else "",
         },
         "partner": {
-            "name": partner.organization_name,
-            "bin": partner.bin,
-            "director_full_name": partner.director_full_name,
-            "director_position": partner.director_position,
-            "legal_address": partner.legal_address,
+            "name": partner.organization_name if partner else "",
+            "bin": partner.bin if partner else "",
+            "director_full_name": partner.director_full_name if partner else "",
+            "director_position": partner.director_position if partner else "",
+            "legal_address": partner.legal_address if partner else "",
         },
         "student": {
-            "full_name": student.full_name,
-            "iin": student.iin,
-            "group_name": student.group_name,
-            "specialty": student.specialty,
-            "practice_start": student.practice_start.isoformat() if student.practice_start else None,
-            "practice_end": student.practice_end.isoformat() if student.practice_end else None,
+            "full_name": student.full_name if student else "",
+            "iin": student.iin if student else "",
+            "group_name": student.group_name if student else "",
+            "specialty": student.specialty if student else "",
+            "practice_start": student.practice_start.isoformat() if student and student.practice_start else None,
+            "practice_end": student.practice_end.isoformat() if student and student.practice_end else None,
         },
     }
 
@@ -190,7 +222,6 @@ def public_view(token: str):
         sr.viewed_at = utc_now()
         db.session.commit()
 
-    # Aggregated signing state for the same contract
     all_requests = SigningRequest.query.filter_by(contract_id=contract.id).all()
     summary = {
         r.signer_role: {
@@ -223,12 +254,15 @@ def public_view(token: str):
 @bp.get("/public/<string:token>/payload")
 def public_payload(token: str):
     sr = _get_request(token)
-    if not sr or sr.is_expired or sr.status == "revoked":
+    if not sr or sr.is_expired or sr.status in ("revoked", "signed"):
         return jsonify(error="Ссылка недействительна"), 404
     contract = sr.contract
     if not contract.docx_path:
         return jsonify(error="Файл договора отсутствует"), 404
     payload_path = Path(current_app.config["ARCHIVE_FOLDER"]) / contract.docx_path
+    if not payload_path.is_file():
+        current_app.logger.error("Contract file missing on disk: %s", payload_path)
+        return jsonify(error="Файл договора недоступен на сервере"), 500
     data = payload_path.read_bytes()
     return jsonify(
         sha256=payload_sha256(data),
@@ -256,9 +290,19 @@ def public_download(token: str, fmt: str):
 
 @bp.post("/public/<string:token>/submit")
 def public_submit(token: str):
-    sr = _get_request(token)
-    if not sr or sr.is_expired or sr.status == "revoked":
+    # Re-fetch with SELECT FOR UPDATE so two parallel POSTs to the same token
+    # serialise — only one signature gets persisted, the other 409s.
+    sr = (
+        SigningRequest.query.filter_by(token=token)
+        .with_for_update()
+        .first()
+    )
+    if not sr:
         return jsonify(error="Ссылка недействительна"), 404
+    if sr.is_expired:
+        return jsonify(error="Срок ссылки истёк", code="expired"), 410
+    if sr.status == "revoked":
+        return jsonify(error="Ссылка отозвана", code="revoked"), 410
     if sr.status == "signed":
         return jsonify(error="Документ уже подписан по этой ссылке"), 409
 
@@ -268,12 +312,30 @@ def public_submit(token: str):
         return jsonify(error="Подпись не передана"), 400
 
     contract = sr.contract
+    if not contract.docx_path:
+        return jsonify(error="Файл договора отсутствует"), 404
     payload_path = Path(current_app.config["ARCHIVE_FOLDER"]) / contract.docx_path
+    if not payload_path.is_file():
+        current_app.logger.error("Contract file missing on disk: %s", payload_path)
+        return jsonify(error="Файл договора недоступен на сервере"), 500
     payload_bytes = payload_path.read_bytes()
+
     try:
         parsed = parse_cms_signature(cms_b64, payload_bytes)
-    except Exception as exc:  # noqa: BLE001
-        return jsonify(error=f"Ошибка обработки подписи: {exc}"), 400
+    except SignatureError as exc:
+        return jsonify(error=str(exc)), 400
+
+    # Soft IIN/BIN match: warn (and log) if signer identity doesn't match the
+    # expected recipient. We don't reject — for the college role the director
+    # signs with their personal IIN which can't match the BIN of the college.
+    expected = _normalize_iin(sr.recipient_iin_or_bin)
+    actual = _normalize_iin(parsed.signer_iin_or_bin)
+    identity_mismatch = bool(expected and actual and expected != actual)
+    if identity_mismatch:
+        current_app.logger.warning(
+            "Signature ID mismatch on contract %s role=%s: expected=%s signer=%s",
+            contract.id, sr.signer_role, expected, actual,
+        )
 
     sig = Signature(
         contract_id=contract.id,
@@ -286,7 +348,13 @@ def public_submit(token: str):
         signed_payload_sha256=parsed.payload_sha256,
     )
     db.session.add(sig)
-    db.session.flush()
+    try:
+        db.session.flush()
+    except IntegrityError:
+        # Collides with the (contract_id, signer_role) unique constraint —
+        # another request signed this role between our checks and the insert.
+        db.session.rollback()
+        return jsonify(error="Эта роль уже подписана другим запросом"), 409
 
     sr.status = "signed"
     sr.signed_at = utc_now()
@@ -296,37 +364,48 @@ def public_submit(token: str):
     roles_signed = {
         r.signer_role
         for r in SigningRequest.query.filter_by(contract_id=contract.id, status="signed").all()
-    }
-    if {"college", "partner", "student"}.issubset(roles_signed):
+    } | {sr.signer_role}
+    all_signed = {"college", "partner", "student"}.issubset(roles_signed)
+    if all_signed:
         contract.status = ContractStatus.SIGNED
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify(error="Эта роль уже подписана другим запросом"), 409
     return jsonify(
         ok=True,
         signature=sig.to_dict(),
+        warnings=parsed.warnings + (
+            [f"ИИН/БИН подписанта ({actual}) не совпал с ожидаемым ({expected})"]
+            if identity_mismatch else []
+        ),
         signing_state={
             "your_status": "signed",
-            "all_signed": contract.status == ContractStatus.SIGNED,
+            "all_signed": all_signed,
         },
     )
 
 
 def _default_recipients(contract: Contract) -> dict:
     settings = CollegeSettings.query.first()
+    partner = contract.partner
+    student = contract.student
     return {
         "college": {
-            "name": settings.director_full_name if settings else "Директор",
-            "email": settings.email if settings else "",
-            "iin_or_bin": settings.bin if settings else "",
+            "name": (settings.director_full_name if settings else "") or "Директор",
+            "email": (settings.email if settings else "") or "",
+            "iin_or_bin": (settings.bin if settings else "") or "",
         },
         "partner": {
-            "name": contract.partner.director_full_name or contract.partner.organization_name,
-            "email": contract.partner.email or "",
-            "iin_or_bin": contract.partner.bin or "",
+            "name": (partner.director_full_name if partner else "") or (partner.organization_name if partner else ""),
+            "email": (partner.email if partner else "") or "",
+            "iin_or_bin": (partner.bin if partner else "") or "",
         },
         "student": {
-            "name": contract.student.full_name,
+            "name": student.full_name if student else "",
             "email": "",
-            "iin_or_bin": contract.student.iin or "",
+            "iin_or_bin": (student.iin if student else "") or "",
         },
     }

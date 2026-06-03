@@ -138,6 +138,12 @@ export default function ContractDetailPage() {
       toast.error("Сначала сформируйте договор");
       return;
     }
+    // Block if this role is already signed (don't issue a second signature).
+    const alreadySigned = (contract.signatures || []).some((s) => s.signer_role === role);
+    if (alreadySigned) {
+      toast.error("Эта роль уже подписана");
+      return;
+    }
     // Reuse an active signing request for this role; otherwise create a new one.
     let req = requests.find(
       (r) => r.signer_role === role && ["pending", "viewed"].includes(r.status),
@@ -164,11 +170,15 @@ export default function ContractDetailPage() {
       toast.loading("Подпишите документ в NCALayer…", { id: t });
       const cms = await signBase64WithNCALayer(payload_base64);
       toast.loading("Сохраняем подпись…", { id: t });
-      await signingApi.publicSubmit(req.token, cms);
+      const res = await signingApi.publicSubmit(req.token, cms);
       toast.success("Подпись добавлена", { id: t });
+      if (res?.warnings?.length) {
+        res.warnings.forEach((w) => toast(w, { icon: "⚠️", duration: 6000 }));
+      }
       load();
     } catch (e) {
-      toast.error(e.message || "Ошибка подписания", { id: t });
+      const msg = e.response?.data?.error || e.message || "Ошибка подписания";
+      toast.error(msg, { id: t });
     } finally {
       setBusy(false);
     }

@@ -64,12 +64,16 @@ export default function PublicSignPage() {
       toast.loading("Откройте NCALayer и подпишите документ…", { id: t });
       const cms = await signBase64WithNCALayer(payload_base64);
       toast.loading("Сохраняем подпись…", { id: t });
-      await signingApi.publicSubmit(token, cms);
+      const res = await signingApi.publicSubmit(token, cms);
       toast.success("Договор успешно подписан", { id: t });
+      if (res?.warnings?.length) {
+        res.warnings.forEach((w) => toast(w, { icon: "⚠️", duration: 6000 }));
+      }
       setDone(true);
       load();
     } catch (e) {
-      toast.error(e.message || e.response?.data?.error || "Ошибка подписания", { id: t });
+      const msg = e.response?.data?.error || e.message || "Ошибка подписания";
+      toast.error(msg, { id: t });
     } finally {
       setBusy(false);
     }
