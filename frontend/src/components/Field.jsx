@@ -1,6 +1,11 @@
+// Map the numeric `span` prop to complete, static class strings so Tailwind's
+// JIT scanner can discover them at build time. An interpolated `col-span-${span}`
+// is never emitted to the production CSS (the class would silently do nothing).
+const COL_SPAN = { 1: "col-span-1", 2: "col-span-2", 3: "col-span-3" };
+
 export function Field({ label, children, span = 1, hint }) {
   return (
-    <div className={`col-span-${span}`}>
+    <div className={COL_SPAN[span] || "col-span-1"}>
       <label className="label">{label}</label>
       {children}
       {hint && <div className="text-xs text-slate-400 mt-1">{hint}</div>}

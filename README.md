@@ -120,8 +120,8 @@ frontend/
 
 ## Развёртывание на Railway
 
-В корне репозитория уже лежат `Dockerfile`, `.dockerignore`, `railway.json`
-и `Procfile`. Railway сам подберёт Dockerfile-сборку.
+В корне репозитория уже лежат `Dockerfile`, `.dockerignore` и `railway.json`.
+Railway сам подберёт Dockerfile-сборку.
 
 ### Шаги
 

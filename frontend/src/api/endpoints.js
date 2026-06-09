@@ -32,7 +32,8 @@ export const contractsApi = {
   create: (data) => client.post("/contracts", data).then((r) => r.data),
   update: (id, data) => client.put(`/contracts/${id}`, data).then((r) => r.data),
   remove: (id) => client.delete(`/contracts/${id}`).then((r) => r.data),
-  generate: (id) => client.post(`/contracts/${id}/generate`).then((r) => r.data),
+  generate: (id, payload) =>
+    client.post(`/contracts/${id}/generate`, payload || {}).then((r) => r.data),
   uploadScan: (id, file) => {
     const form = new FormData();
     form.append("file", file);

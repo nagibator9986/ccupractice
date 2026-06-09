@@ -92,7 +92,7 @@ def build_signature_report(contract: Contract) -> Path:
             _line(doc, "ИИН/БИН", signature.signer_iin_or_bin)
             _line(doc, "Серийный № сертификата", signature.signer_serial)
             _line(doc, "SHA-256 подписанного документа", signature.signed_payload_sha256)
-            _line(doc, "Дата и время подписания (UTC)", signature.created_at.strftime("%d.%m.%Y %H:%M:%S"))
+            _line(doc, "Дата и время подписания (UTC)", signature.created_at.strftime("%d.%m.%Y %H:%M:%S") if signature.created_at else "—")
             _line(doc, "Способ подписания", "ЭЦП (CAdES/CMS, NCALayer)")
         else:
             status = sr.status if sr else "не отправлено"

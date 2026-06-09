@@ -150,15 +150,25 @@ export async function signBase64WithNCALayer(payloadBase64, options = {}) {
       module: "kz.gov.pki.knca.basics",
       method: "sign",
       args: {
-        // Empty array = allow all known storages (PKCS12, ID card, JaCarta…).
-        allowedStorages: [],
+        // Omit `allowedStorages` entirely to offer ALL detected storages
+        // (PKCS12, ID card, JaCarta, Kaztoken…). Per the canonical
+        // kz.gov.pki.knca.basics spec an absent key means "all supported
+        // storages"; an empty array [] is unspecified and version-dependent.
         format: "cms",
         data: payloadBase64,
         signingParams: {
-          decode: "base64",
+          // `decode` MUST be the boolean `true` so NCALayer base64-decodes
+          // `data` back to the raw DOCX bytes BEFORE hashing/signing. The
+          // backend verifies messageDigest === SHA-256(raw DOCX); a non-boolean
+          // value (the previous "base64") is parsed by NCALayer as `false`, so
+          // it would sign the base64 STRING and every signature would be
+          // rejected as «подпись сделана под другой документ».
+          decode: true,
           encapsulate: attachData,
           digested: false,
-          tsa: false,
+          // Documented key is `tsaProfile` (null = no timestamp). The backend
+          // neither requests nor verifies a TSP token.
+          tsaProfile: null,
         },
         // No extKeyUsage filter — let user choose any of their certs.
         signerParams: {},

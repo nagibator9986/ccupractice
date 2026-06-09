@@ -18,7 +18,7 @@ import base64
 from pathlib import Path
 
 from flask import Blueprint, current_app, jsonify, request, send_from_directory
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from ..extensions import db
 from ..models import (
@@ -97,6 +97,20 @@ def invite(cid: int):
             continue
         if role in signed_roles and not force:
             continue
+        if role in signed_roles and force:
+            # Force re-sign: drop the existing Signature so the new submit can
+            # insert without colliding with uq_signature_contract_role
+            # (otherwise the new link looks valid but every submit 409s).
+            old_sig = Signature.query.filter_by(contract_id=cid, signer_role=role).first()
+            if old_sig:
+                # Detach any request still pointing at this signature first, so
+                # the FK doesn't dangle on SQLite (no ON DELETE SET NULL there).
+                SigningRequest.query.filter_by(signature_id=old_sig.id).update(
+                    {"signature_id": None}
+                )
+                db.session.delete(old_sig)
+                if contract.status == ContractStatus.SIGNED:
+                    contract.status = ContractStatus.SENT
 
         active = SigningRequest.query.filter_by(contract_id=cid, signer_role=role).filter(
             SigningRequest.status.in_(("pending", "viewed"))
@@ -159,9 +173,10 @@ def resend(rid: int):
     sr.status = "pending"
     sr.viewed_at = None
     sr.revoked_at = None
-    # Reset expiration so the resent link has a full TTL window.
+    # Reset expiration so the resent link has a full TTL window (single source
+    # of truth: SigningRequest.DEFAULT_TTL_DAYS).
     from datetime import timedelta
-    sr.expires_at = utc_now() + timedelta(days=30)
+    sr.expires_at = utc_now() + timedelta(days=SigningRequest.DEFAULT_TTL_DAYS)
     db.session.commit()
     return jsonify(item=sr.to_dict(include_token=True, public_base_url=_public_base()))
 
@@ -254,8 +269,14 @@ def public_view(token: str):
 @bp.get("/public/<string:token>/payload")
 def public_payload(token: str):
     sr = _get_request(token)
-    if not sr or sr.is_expired or sr.status in ("revoked", "signed"):
+    if not sr:
         return jsonify(error="Ссылка недействительна"), 404
+    if sr.is_expired:
+        return jsonify(error="Срок ссылки истёк", code="expired"), 410
+    if sr.status == "revoked":
+        return jsonify(error="Ссылка отозвана", code="revoked"), 410
+    if sr.status == "signed":
+        return jsonify(error="Документ уже подписан", code="signed"), 409
     contract = sr.contract
     if not contract.docx_path:
         return jsonify(error="Файл договора отсутствует"), 404
@@ -290,8 +311,11 @@ def public_download(token: str, fmt: str):
 
 @bp.post("/public/<string:token>/submit")
 def public_submit(token: str):
-    # Re-fetch with SELECT FOR UPDATE so two parallel POSTs to the same token
-    # serialise — only one signature gets persisted, the other 409s.
+    # Re-fetch the request. On Postgres SELECT ... FOR UPDATE row-locks it so
+    # two parallel POSTs to the same token serialise; on SQLite FOR UPDATE is a
+    # silent no-op, so the real "one signature per role" guarantee comes from
+    # the (contract_id, signer_role) UNIQUE constraint, whose IntegrityError we
+    # catch below and turn into a 409.
     sr = (
         SigningRequest.query.filter_by(token=token)
         .with_for_update()
@@ -326,11 +350,15 @@ def public_submit(token: str):
         return jsonify(error=str(exc)), 400
 
     # Soft IIN/BIN match: warn (and log) if signer identity doesn't match the
-    # expected recipient. We don't reject — for the college role the director
-    # signs with their personal IIN which can't match the BIN of the college.
+    # expected recipient. We don't reject. Skip the college role entirely — the
+    # director signs with their personal IIN, but the college recipient is
+    # seeded with the college BIN, so a mismatch there is expected and carries
+    # no signal (it would otherwise warn on every legitimate college signature).
     expected = _normalize_iin(sr.recipient_iin_or_bin)
     actual = _normalize_iin(parsed.signer_iin_or_bin)
-    identity_mismatch = bool(expected and actual and expected != actual)
+    identity_mismatch = bool(
+        expected and actual and expected != actual and sr.signer_role != "college"
+    )
     if identity_mismatch:
         current_app.logger.warning(
             "Signature ID mismatch on contract %s role=%s: expected=%s signer=%s",
@@ -350,9 +378,11 @@ def public_submit(token: str):
     db.session.add(sig)
     try:
         db.session.flush()
-    except IntegrityError:
-        # Collides with the (contract_id, signer_role) unique constraint —
-        # another request signed this role between our checks and the insert.
+    except (IntegrityError, OperationalError):
+        # IntegrityError: collides with the (contract_id, signer_role) unique
+        # constraint — another request signed this role between our checks and
+        # the insert. OperationalError: transient SQLite "database is locked"
+        # under concurrent writers. Both are safely retryable for the caller.
         db.session.rollback()
         return jsonify(error="Эта роль уже подписана другим запросом"), 409
 
@@ -360,10 +390,14 @@ def public_submit(token: str):
     sr.signed_at = utc_now()
     sr.signature_id = sig.id
 
-    # Auto-update contract status when all three roles signed
+    # Auto-update contract status when all three roles signed. Count from the
+    # Signature table — the unique-constrained source of truth — so a mixed
+    # admin-attach + public-submit workflow (college signed via the admin
+    # endpoint creates a Signature but no "signed" SigningRequest) still flips
+    # the contract to SIGNED instead of getting stuck at SENT.
     roles_signed = {
-        r.signer_role
-        for r in SigningRequest.query.filter_by(contract_id=contract.id, status="signed").all()
+        s.signer_role
+        for s in Signature.query.filter_by(contract_id=contract.id).all()
     } | {sr.signer_role}
     all_signed = {"college", "partner", "student"}.issubset(roles_signed)
     if all_signed:
@@ -371,7 +405,7 @@ def public_submit(token: str):
 
     try:
         db.session.commit()
-    except IntegrityError:
+    except (IntegrityError, OperationalError):
         db.session.rollback()
         return jsonify(error="Эта роль уже подписана другим запросом"), 409
     return jsonify(

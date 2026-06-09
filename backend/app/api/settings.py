@@ -1,11 +1,11 @@
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import jwt_required
 from pathlib import Path
-from werkzeug.utils import secure_filename
 
 from ..extensions import db
 from ..models import CollegeSettings
 from ..utils.auth import admin_required
+from ..utils.files import safe_filename
 from ..utils.serializers import clean_str, get_json_safe
 
 bp = Blueprint("settings", __name__)
@@ -57,7 +57,10 @@ def upload_template():
         return jsonify(error="Файл не передан"), 400
     if not f.filename.lower().endswith(".docx"):
         return jsonify(error="Допустимы только .docx файлы"), 400
-    name = secure_filename(f.filename) or "contract_template.docx"
+    # Use safe_filename (keeps Cyrillic) — secure_filename strips all non-ASCII,
+    # so e.g. «Договор_2024.docx» collapses to «2024.docx» and distinct Cyrillic
+    # templates silently overwrite each other.
+    name = safe_filename(f.filename, fallback="contract_template.docx")
     if not name.lower().endswith(".docx"):
         name = name + ".docx"
     dest = Path(current_app.config["TEMPLATES_FOLDER"]) / name

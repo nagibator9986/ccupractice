@@ -126,7 +126,17 @@ def create_app() -> Flask:
 
     cors_origins = os.getenv("CORS_ORIGINS", "*")
     origins = [o.strip() for o in cors_origins.split(",") if o.strip()] or ["*"]
-    CORS(app, resources={r"/api/*": {"origins": origins}}, supports_credentials=True)
+    # Never reflect an arbitrary Origin together with credentials: a wildcard
+    # origin list plus supports_credentials=True is forbidden by the CORS spec
+    # and turns the API into a credential-reflecting open endpoint. Auth here is
+    # header-based Bearer tokens (no cookies), so credentials are only enabled
+    # when an explicit allow-list is configured.
+    allow_credentials = origins != ["*"]
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": origins}},
+        supports_credentials=allow_credentials,
+    )
 
     # Blueprints
     from .api.auth import bp as auth_bp
@@ -191,6 +201,17 @@ def create_app() -> Flask:
                 from .services.bootstrap import ensure_seed_data
                 ensure_seed_data()
             except Exception as exc:  # noqa: BLE001
-                app.logger.exception("DB bootstrap failed: %s", exc)
+                # On first boot multiple gunicorn workers run create_all()
+                # concurrently (run:app is imported per-worker, no --preload).
+                # create_all() uses checkfirst=True, so there is a TOCTOU window
+                # where the losing worker raises "table already exists". That is
+                # benign — log it quietly instead of an error-level traceback
+                # that pollutes logs / trips alerting.
+                if "already exists" in str(exc).lower():
+                    app.logger.info(
+                        "DB schema already present (concurrent worker bootstrap): %s", exc
+                    )
+                else:
+                    app.logger.exception("DB bootstrap failed: %s", exc)
 
     return app

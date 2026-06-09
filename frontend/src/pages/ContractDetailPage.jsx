@@ -68,14 +68,29 @@ export default function ContractDetailPage() {
     };
   }, []);
 
-  async function generate() {
+  async function generate(force = false) {
     setBusy(true);
     try {
-      const { item } = await contractsApi.generate(id);
+      const { item } = await contractsApi.generate(id, force ? { force: true } : undefined);
       setContract(item);
       toast.success("Договор сформирован");
+      load();
     } catch (e) {
-      toast.error(e.response?.data?.error || "Ошибка формирования");
+      if (
+        !force &&
+        e.response?.status === 409 &&
+        e.response?.data?.code === "has_signatures"
+      ) {
+        if (
+          confirm(
+            "Договор уже подписан или находится на подписании. Пересформировать и СБРОСИТЬ все существующие подписи?",
+          )
+        ) {
+          return await generate(true);
+        }
+      } else {
+        toast.error(e.response?.data?.error || "Ошибка формирования");
+      }
     } finally {
       setBusy(false);
     }
@@ -218,7 +233,7 @@ export default function ContractDetailPage() {
           <>
             <button className="btn-secondary" onClick={() => navigate(-1)}>← Назад</button>
             {isAdmin && (
-              <button className="btn-primary" disabled={busy} onClick={generate}>
+              <button className="btn-primary" disabled={busy} onClick={() => generate()}>
                 {contract.docx_path ? "Пересформировать" : "Сформировать договор"}
               </button>
             )}

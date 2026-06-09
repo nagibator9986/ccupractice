@@ -65,10 +65,13 @@ _HASH_BY_OID = {
 
 
 def _hash(payload_bytes: bytes, algo: str) -> bytes:
-    klass = _HASH_BY_OID.get(algo.lower())
-    if not klass:
+    algo = algo.lower()
+    if algo not in _HASH_BY_OID:
         raise SignatureError(f"Не поддерживаемый алгоритм хэширования: {algo}")
-    h = hashlib.new(algo if algo != "sha1" else "sha1")
+    try:
+        h = hashlib.new(algo)
+    except ValueError as e:  # pragma: no cover - defensive
+        raise SignatureError(f"Не поддерживаемый алгоритм хэширования: {algo}") from e
     h.update(payload_bytes)
     return h.digest()
 
@@ -162,18 +165,25 @@ def _find_signer_cert(signed_data: cms.SignedData, signer_info: cms.SignerInfo) 
 
 # ── Crypto verification helpers ────────────────────────────────────────────
 
-_RSA_SIG_HASHES = {
-    "sha256_rsa": hashes.SHA256,
-    "sha384_rsa": hashes.SHA384,
-    "sha512_rsa": hashes.SHA512,
-    "sha1_rsa": hashes.SHA1,
-    "rsassa_pkcs1v15": hashes.SHA256,  # disambiguated by digest_algorithm
+# Signature-algorithm allow-lists, keyed by the asn1crypto `.native` name of
+# SignerInfo.signature_algorithm. We pick the RSA padding scheme from the
+# declared algorithm instead of blindly assuming PKCS#1 v1.5, and reject any
+# unrecognised algorithm rather than silently defaulting.
+_RSA_PKCS1V15_ALGOS = {
+    "rsassa_pkcs1v15",
+    "sha1_rsa",
+    "sha224_rsa",
+    "sha256_rsa",
+    "sha384_rsa",
+    "sha512_rsa",
 }
-
-_ECDSA_SIG_HASHES = {
-    "sha256_ecdsa": hashes.SHA256,
-    "sha384_ecdsa": hashes.SHA384,
-    "sha512_ecdsa": hashes.SHA512,
+_ECDSA_ALGOS = {
+    "ecdsa",
+    "sha1_ecdsa",
+    "sha224_ecdsa",
+    "sha256_ecdsa",
+    "sha384_ecdsa",
+    "sha512_ecdsa",
 }
 
 
@@ -189,13 +199,30 @@ def _verify_signature(cert: cx509.Certificate, signed_attrs_der: bytes,
         raise SignatureError(f"Неподдерживаемый digest: {digest_algo_name}")
 
     if isinstance(pub, rsa.RSAPublicKey):
+        # Select the RSA padding scheme from the declared signature algorithm
+        # rather than assuming PKCS#1 v1.5 for every RSA key.
+        if sig_algo_name == "rsassa_pss":
+            rsa_padding = padding.PSS(
+                mgf=padding.MGF1(hash_klass()),
+                salt_length=padding.PSS.MAX_LENGTH,
+            )
+        elif sig_algo_name in _RSA_PKCS1V15_ALGOS:
+            rsa_padding = padding.PKCS1v15()
+        else:
+            raise SignatureError(
+                f"Неподдерживаемый алгоритм подписи RSA: {sig_algo_name}"
+            )
         try:
-            pub.verify(signature, signed_attrs_der, padding.PKCS1v15(), hash_klass())
+            pub.verify(signature, signed_attrs_der, rsa_padding, hash_klass())
         except InvalidSignature as e:
             raise SignatureError("Неверная подпись (RSA)") from e
         return
 
     if isinstance(pub, ec.EllipticCurvePublicKey):
+        if sig_algo_name not in _ECDSA_ALGOS:
+            raise SignatureError(
+                f"Неподдерживаемый алгоритм подписи ECDSA: {sig_algo_name}"
+            )
         try:
             pub.verify(signature, signed_attrs_der, ec.ECDSA(hash_klass()))
         except InvalidSignature as e:
@@ -272,21 +299,33 @@ def parse_cms_signature(cms_b64: str, payload_bytes: bytes) -> ParsedSignature:
             "Хэш подписанного содержимого не совпадает с хэшем файла договора "
             "(подпись сделана под другой документ)"
         )
-    if content_type_value not in (None, "data"):
-        # Some implementations use different content types; warn but don't fail.
-        pass
 
-    # 3) Verify the RSA/ECDSA signature itself against signed_attrs DER bytes.
-    # The signed bytes per RFC 5652 §5.4 are the DER encoding of the SET OF
-    # attributes (re-encoded with implicit tag 0xA0 → explicit 0x31 SET tag).
-    signed_attrs_der = signed_attrs.dump()
-    # RFC 5652: when verifying, the IMPLICIT [0] tag must be replaced by an
-    # explicit SET tag (0x31). asn1crypto's `dump()` on `CMSAttributes` already
-    # emits the SET form (0x31 ...).
-    if signed_attrs_der[:1] != b"\x31":
-        # Some implementations dump with the implicit [0] tag (0xA0).
-        # Re-tag to SET (0x31) for verification, leaving length unchanged.
-        signed_attrs_der = b"\x31" + signed_attrs_der[1:]
+    warnings: list[str] = []
+    # RFC 5652 §11.1: when SignedAttributes are present, a content-type attribute
+    # MUST be present and MUST equal the encapContentInfo eContentType. We surface
+    # a deviation as a non-fatal warning rather than a hard reject so a genuine
+    # NCALayer signature is never blocked by an implementation quirk (the
+    # load-bearing binding is the messageDigest check above).
+    try:
+        expected_content_type = signed_data["encap_content_info"]["content_type"].native
+    except Exception:
+        expected_content_type = None
+    if content_type_value is None:
+        warnings.append("В подписи отсутствует атрибут content-type")
+    elif expected_content_type is not None and content_type_value != expected_content_type:
+        warnings.append(
+            "Атрибут content-type подписи не совпадает с типом подписанного содержимого"
+        )
+
+    # 3) Verify the RSA/ECDSA signature itself against the signed_attrs DER bytes.
+    # RFC 5652 §5.4: the signed bytes are the DER encoding of the SignedAttributes
+    # as an explicit universal SET (tag 0x31), NOT the IMPLICIT [0] (0xA0) form
+    # that appears on the wire. For a parsed child of a loaded SignerInfo,
+    # `.dump()` returns the wire form tagged 0xA0; `.untag().dump()` strips the
+    # implicit context tag and re-applies the universal SET tag, yielding the
+    # exact RFC 5652 encoding while preserving the original contents octets (so
+    # BER input from non-asn1crypto signers, e.g. Java/BouncyCastle, stays intact).
+    signed_attrs_der = signed_attrs.untag().dump()
 
     sig_algo = signer_info["signature_algorithm"]["algorithm"].native
     signature_bytes = signer_info["signature"].native
@@ -299,10 +338,11 @@ def parse_cms_signature(cms_b64: str, payload_bytes: bytes) -> ParsedSignature:
         raise SignatureError(f"Не удалось проверить подпись: {e}") from e
 
     # 4) Validity period check (non-fatal warning if the cert is past validity).
-    warnings: list[str] = []
-    not_before = cert.not_valid_before_utc.replace(tzinfo=None) if hasattr(cert, "not_valid_before_utc") else cert.not_valid_before
-    not_after = cert.not_valid_after_utc.replace(tzinfo=None) if hasattr(cert, "not_valid_after_utc") else cert.not_valid_after
-    now = datetime.utcnow()
+    # cryptography >= 42 always exposes the tz-aware *_utc accessors; keep
+    # everything tz-aware and avoid the deprecated datetime.utcnow().
+    not_before = cert.not_valid_before_utc
+    not_after = cert.not_valid_after_utc
+    now = datetime.now(timezone.utc)
     if not_before and now < not_before:
         warnings.append(f"Сертификат ещё не действителен (с {not_before.isoformat()})")
     if not_after and now > not_after:

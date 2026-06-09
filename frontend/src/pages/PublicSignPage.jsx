@@ -136,10 +136,10 @@ export default function PublicSignPage() {
             <h3 className="font-semibold mb-3 text-charcoal-700">Документ</h3>
             <div className="flex flex-wrap gap-2">
               {data.download.docx && (
-                <a className="btn-secondary" href={data.download.docx} target="_blank" rel="noreferrer">📄 Скачать DOCX</a>
+                <a className="btn-secondary" href={signingApi.publicDownloadUrl(token, "docx")} target="_blank" rel="noreferrer">📄 Скачать DOCX</a>
               )}
               {data.download.pdf && (
-                <a className="btn-secondary" href={data.download.pdf} target="_blank" rel="noreferrer">📕 Скачать PDF</a>
+                <a className="btn-secondary" href={signingApi.publicDownloadUrl(token, "pdf")} target="_blank" rel="noreferrer">📕 Скачать PDF</a>
               )}
             </div>
             <p className="text-xs text-charcoal-500 mt-3">

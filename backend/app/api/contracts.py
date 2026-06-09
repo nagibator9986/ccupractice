@@ -4,8 +4,9 @@ from pathlib import Path
 from flask import Blueprint, current_app, jsonify, request, send_from_directory
 from flask_jwt_extended import jwt_required
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from ..extensions import db
-from ..models import Contract, ContractStatus, Partner, Student
+from ..models import Contract, ContractStatus, Partner, Student, SigningRequest
 from ..services.document_generator import generate_contract_files
 from ..services.numbering import next_contract_number
 from ..services.signature_report import build_signature_report
@@ -80,20 +81,31 @@ def create_contract():
         return jsonify(error=f"Студент с id={student_id} не найден"), 404
 
     contract_date = parse_date(data.get("contract_date")) or date.today()
-    number, year, _ = next_contract_number(contract_date.year)
 
-    contract = Contract(
-        number=number,
-        year=year,
-        contract_date=contract_date,
-        partner_id=partner.id,
-        student_id=student.id,
-        status=ContractStatus.DRAFT,
-        notes=clean_str(data.get("notes")),
-    )
-    db.session.add(contract)
-    db.session.commit()
-    return jsonify(item=contract.to_dict(include_relations=True)), 201
+    # Allocate the number + insert with a bounded retry: under concurrent
+    # creation two requests can race on the per-year counter and collide on the
+    # UNIQUE(number) constraint. Retry re-allocates instead of 500-ing.
+    last_exc = None
+    for _attempt in range(5):
+        number, year, _ = next_contract_number(contract_date.year)
+        contract = Contract(
+            number=number,
+            year=year,
+            contract_date=contract_date,
+            partner_id=partner.id,
+            student_id=student.id,
+            status=ContractStatus.DRAFT,
+            notes=clean_str(data.get("notes")),
+        )
+        db.session.add(contract)
+        try:
+            db.session.commit()
+            return jsonify(item=contract.to_dict(include_relations=True)), 201
+        except IntegrityError as exc:
+            db.session.rollback()
+            last_exc = exc
+    current_app.logger.exception("Contract number allocation failed: %s", last_exc)
+    return jsonify(error="Не удалось присвоить номер договора, попробуйте ещё раз"), 409
 
 
 @bp.put("/<int:cid>")
@@ -120,6 +132,41 @@ def update_contract(cid):
 @admin_required
 def generate_contract(cid):
     contract = Contract.query.get_or_404(cid)
+
+    # Regenerating overwrites the DOCX at a deterministic path. Every collected
+    # ЭЦП (CMS) was verified against the *current* file bytes (messageDigest ==
+    # SHA-256 of the file on disk), so overwriting silently invalidates all
+    # existing signatures. Refuse unless the caller explicitly forces a reset.
+    data = get_json_safe()
+    force = bool(data.get("force"))
+    has_sigs = bool(contract.signatures)
+    active_reqs = (
+        SigningRequest.query.filter_by(contract_id=cid)
+        .filter(SigningRequest.status.in_(("pending", "viewed", "signed")))
+        .all()
+    )
+    if (has_sigs or active_reqs) and not force:
+        return (
+            jsonify(
+                error="Договор уже подписывается или подписан — перегенерация "
+                "сделает существующие подписи недействительными. Повторите с "
+                "подтверждением, чтобы сбросить подписи.",
+                code="has_signatures",
+            ),
+            409,
+        )
+    if force and (has_sigs or active_reqs):
+        # Explicit reset so DB state stays consistent with the new file: drop
+        # signatures, revoke open/used links, demote the status.
+        for s in list(contract.signatures):
+            db.session.delete(s)
+        for r in active_reqs:
+            r.status = "revoked"
+            r.revoked_at = utc_now()
+            r.signature_id = None
+        if contract.status in (ContractStatus.SIGNED, ContractStatus.SENT):
+            contract.status = ContractStatus.DRAFT
+
     try:
         generate_contract_files(contract)
     except Exception as exc:  # noqa: BLE001

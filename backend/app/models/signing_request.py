@@ -39,12 +39,14 @@ class SigningRequest(db.Model):
     contract = db.relationship("Contract", backref=db.backref("signing_requests", lazy=True, cascade="all, delete-orphan"))
     signature = db.relationship("Signature", uselist=False)
 
+    DEFAULT_TTL_DAYS = 30
+
     @staticmethod
     def generate_token() -> str:
         return secrets.token_urlsafe(32)
 
     @classmethod
-    def create_for(cls, contract_id: int, signer_role: str, recipient: dict, ttl_days: int = 30) -> "SigningRequest":
+    def create_for(cls, contract_id: int, signer_role: str, recipient: dict, ttl_days: int = DEFAULT_TTL_DAYS) -> "SigningRequest":
         sr = cls(
             contract_id=contract_id,
             signer_role=signer_role,
