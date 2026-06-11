@@ -231,8 +231,12 @@ export async function signBase64WithNCALayer(payloadBase64, options = {}) {
           // neither requests nor verifies a TSP token.
           tsaProfile: null,
         },
-        // No extKeyUsage filter — let user choose any of their certs.
-        signerParams: {},
+        // `extKeyUsageOids` is REQUIRED: NCALayer does
+        // signerParams.getJSONArray("extKeyUsageOids") and throws
+        // «JSONObject["extKeyUsageOids"] not found» (INVOCATION_ERROR) when the
+        // key is absent. An empty array = no EKU filter, so the user may pick
+        // any of their certs; we verify the chosen cert on the backend.
+        signerParams: { extKeyUsageOids: [] },
         locale: "ru",
       },
     };
