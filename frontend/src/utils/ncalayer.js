@@ -13,7 +13,13 @@
  *   { status: false, message: "..." }                  // generic failure
  */
 
-const NCALAYER_URLS = ["wss://127.0.0.1:13579/", "ws://127.0.0.1:13579/"];
+// On an HTTPS page the browser blocks insecure ws:// as mixed content, so only
+// wss:// can ever connect there — probing ws:// would just waste the connect
+// timeout and log a console error. On HTTP both are reachable.
+const NCALAYER_URLS =
+  typeof window !== "undefined" && window.location.protocol === "https:"
+    ? ["wss://127.0.0.1:13579/"]
+    : ["wss://127.0.0.1:13579/", "ws://127.0.0.1:13579/"];
 
 const CONNECT_TIMEOUT_MS = 4000;
 const SIGN_TIMEOUT_MS = 5 * 60 * 1000; // 5 min — covers PIN entry / token confirmation

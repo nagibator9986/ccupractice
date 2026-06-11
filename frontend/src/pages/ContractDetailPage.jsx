@@ -487,7 +487,9 @@ function NCABadge({ available }) {
     return <div className="text-xs px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100">✓ NCALayer готов</div>;
   return (
     <div className="text-xs px-3 py-2 rounded-xl bg-amber-50 text-amber-700 ring-1 ring-amber-100">
-      ⚠ Запустите NCALayer перед подписанием
+      ⚠ NCALayer не обнаружен. Запустите приложение; если уже запущено — откройте{" "}
+      <a className="link" href="https://127.0.0.1:13579" target="_blank" rel="noreferrer">https://127.0.0.1:13579</a>
+      {" "}и подтвердите сертификат.
     </div>
   );
 }

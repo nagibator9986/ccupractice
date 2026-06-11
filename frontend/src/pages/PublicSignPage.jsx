@@ -275,10 +275,18 @@ function NCALayerBanner({ available }) {
       </div>
     );
   return (
-    <div className="text-xs px-3 py-2 rounded-xl bg-amber-50 text-amber-700 ring-1 ring-amber-100">
-      ⚠ NCALayer не обнаружен. Установите приложение НУЦ РК с{" "}
-      <a className="link" href="https://pki.gov.kz/ncalayer/" target="_blank" rel="noreferrer">pki.gov.kz/ncalayer</a>
-      {" "}и запустите его перед подписанием.
+    <div className="text-xs px-3 py-2 rounded-xl bg-amber-50 text-amber-700 ring-1 ring-amber-100 space-y-1.5">
+      <div>
+        ⚠ NCALayer не обнаружен. Установите приложение НУЦ РК с{" "}
+        <a className="link" href="https://pki.gov.kz/ncalayer/" target="_blank" rel="noreferrer">pki.gov.kz/ncalayer</a>
+        {" "}и запустите его.
+      </div>
+      <div>
+        Если приложение уже запущено, один раз откройте{" "}
+        <a className="link" href="https://127.0.0.1:13579" target="_blank" rel="noreferrer">https://127.0.0.1:13579</a>
+        {" "}и подтвердите сертификат NCALayer (защищённый сайт пускает подпись только
+        к доверенному сертификату), затем нажмите «Проверить NCALayer повторно».
+      </div>
     </div>
   );
 }
