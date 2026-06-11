@@ -67,18 +67,43 @@ function openSocket() {
   });
 }
 
+// A CMS produced by NCALayer is a long, PEM-less base64 blob (starts with "MII…").
+function looksLikeCms(s) {
+  return (
+    typeof s === "string" &&
+    s.trim().length > 100 &&
+    /^[A-Za-z0-9+/=\r\n]+$/.test(s.trim())
+  );
+}
+
 function extractCms(data) {
-  // Handles every shape we've observed across NCALayer versions.
-  if (!data || typeof data !== "object") return null;
-  const candidates = [
-    data.responseObject,
-    data?.result?.cms,
+  // 1) Known happy paths first (fast + unambiguous) across NCALayer versions.
+  const known = [
+    data?.responseObject,
     Array.isArray(data?.body?.result) ? data.body.result[0] : data?.body?.result,
-    data?.body,
-    data?.result,
+    data?.body?.cms,
+    data?.result?.cms,
+    Array.isArray(data?.result) ? data.result[0] : null,
+    typeof data?.body === "string" ? data.body : null,
+    typeof data?.result === "string" ? data.result : null,
+    typeof data === "string" ? data : null,
   ];
-  for (const c of candidates) {
-    if (typeof c === "string" && c.length > 64) return c;
+  for (const c of known) {
+    if (looksLikeCms(c)) return c.trim();
+  }
+  // 2) Fallback: deep-walk the whole response and return the first CMS-looking
+  // string anywhere. Robust against envelope shape changes between versions.
+  const seen = new Set();
+  const stack = [data];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (cur == null) continue;
+    if (looksLikeCms(cur)) return cur.trim();
+    if (typeof cur === "object") {
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      for (const v of Array.isArray(cur) ? cur : Object.values(cur)) stack.push(v);
+    }
   }
   return null;
 }
@@ -131,15 +156,37 @@ export async function signBase64WithNCALayer(payloadBase64, options = {}) {
       try {
         data = JSON.parse(event.data);
       } catch {
-        return finish(reject, new Error("Некорректный ответ от NCALayer"));
+        // Some NCALayer builds may send a non-JSON heartbeat; ignore it and
+        // keep waiting for the real result (the timeout is our safety net).
+        // eslint-disable-next-line no-console
+        console.debug("[NCALayer] non-JSON message ignored:", event.data);
+        return;
       }
-      // Failure envelope
-      if (data?.status === false || data?.result === false || data?.errorCode || data?.errorMessage) {
+      // Log the raw envelope so the exact shape is visible if extraction fails.
+      // eslint-disable-next-line no-console
+      console.log("[NCALayer] response:", data);
+
+      // Explicit failure / user cancel envelope.
+      if (data?.status === false || data?.errorCode || data?.errorMessage || data?.code === "USER_CANCELED") {
         return finish(reject, new Error(extractError(data)));
       }
       const cms = extractCms(data);
       if (cms) return finish(resolve, cms);
-      finish(reject, new Error("NCALayer не вернул CMS-подпись"));
+
+      // No CMS found. If this looks like a FINAL response (it carries a
+      // status/body/result field), treat it as a failure so we don't hang.
+      // Otherwise it's likely a greeting/ack/heartbeat — ignore and keep
+      // waiting for the real signing result.
+      const isFinal =
+        data && typeof data === "object" &&
+        ("status" in data || "body" in data || "result" in data || "responseObject" in data);
+      if (isFinal) {
+        // eslint-disable-next-line no-console
+        console.warn("[NCALayer] final response without extractable CMS:", data);
+        return finish(reject, new Error("NCALayer не вернул CMS-подпись"));
+      }
+      // eslint-disable-next-line no-console
+      console.debug("[NCALayer] intermediate message ignored, waiting for result");
     };
     ws.onerror = () => finish(reject, new Error("Ошибка WebSocket NCALayer"));
     ws.onclose = (ev) => {
