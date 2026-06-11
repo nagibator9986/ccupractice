@@ -173,13 +173,21 @@ export async function signBase64WithNCALayer(payloadBase64, options = {}) {
       const cms = extractCms(data);
       if (cms) return finish(resolve, cms);
 
-      // No CMS found. If this looks like a FINAL response (it carries a
-      // status/body/result field), treat it as a failure so we don't hang.
-      // Otherwise it's likely a greeting/ack/heartbeat — ignore and keep
-      // waiting for the real signing result.
+      // NCALayer pushes a version handshake `{result: {version: "1.4"}}` right
+      // after the socket opens, BEFORE the sign dialog. Ignore it and keep
+      // waiting — rejecting here would close the socket before the user can
+      // enter their PIN and the real CMS could be returned.
+      if (data?.result && typeof data.result === "object" && "version" in data.result) {
+        // eslint-disable-next-line no-console
+        console.debug("[NCALayer] version handshake:", data.result.version, "— waiting for sign result");
+        return;
+      }
+
+      // No CMS found. Only a genuine FINAL sign envelope (carries `status` or
+      // `body`) without a CMS is a real failure; anything else (greeting / ack /
+      // heartbeat) is ignored so we keep waiting for the signing result.
       const isFinal =
-        data && typeof data === "object" &&
-        ("status" in data || "body" in data || "result" in data || "responseObject" in data);
+        data && typeof data === "object" && ("status" in data || "body" in data);
       if (isFinal) {
         // eslint-disable-next-line no-console
         console.warn("[NCALayer] final response without extractable CMS:", data);
