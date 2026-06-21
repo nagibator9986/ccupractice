@@ -4,15 +4,23 @@ import { authApi } from "../api/endpoints";
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(() => {
+  const initialUser = (() => {
     try {
       const raw = localStorage.getItem("ccu_user");
       return raw ? JSON.parse(raw) : null;
     } catch {
       return null;
     }
-  });
-  const [loading, setLoading] = useState(false);
+  })();
+
+  const [user, setUser] = useState(initialUser);
+  // Start in the loading state when we have a token but no usable cached user
+  // (absent OR corrupt JSON) — otherwise the first render sees user=null,
+  // loading=false and ProtectedRoute bounces a legitimately-logged-in user to
+  // /login on hard refresh before the me() revalidation in the effect can run.
+  const [loading, setLoading] = useState(
+    () => !!localStorage.getItem("ccu_token") && !initialUser,
+  );
 
   useEffect(() => {
     const token = localStorage.getItem("ccu_token");

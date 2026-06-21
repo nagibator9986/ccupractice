@@ -1,16 +1,55 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export default function Modal({ open, onClose, title, children, footer, size = "lg" }) {
+  const cardRef = useRef(null);
+  const prevFocus = useRef(null);
+
   useEffect(() => {
     if (!open) return;
+    prevFocus.current = document.activeElement;
+
+    const card = cardRef.current;
+    (card?.querySelector(FOCUSABLE) || card)?.focus();
+
     const handler = (e) => {
-      if (e.key === "Escape") onClose?.();
+      if (e.key === "Escape") {
+        onClose?.();
+        return;
+      }
+      // Trap Tab inside the dialog so focus can't escape to the inert page
+      // behind the overlay (aria-modal="true" promises exactly that).
+      if (e.key === "Tab" && card) {
+        const nodes = Array.from(card.querySelectorAll(FOCUSABLE)).filter(
+          (el) => el.offsetParent !== null,
+        );
+        if (nodes.length === 0) {
+          e.preventDefault();
+          card.focus();
+          return;
+        }
+        const first = nodes[0];
+        const last = nodes[nodes.length - 1];
+        const active = document.activeElement;
+        if (e.shiftKey && (active === first || active === card)) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
+
     document.addEventListener("keydown", handler);
     document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("keydown", handler);
       document.body.style.overflow = "";
+      // Restore focus to whatever opened the modal.
+      prevFocus.current?.focus?.();
     };
   }, [open, onClose]);
 
@@ -28,7 +67,9 @@ export default function Modal({ open, onClose, title, children, footer, size = "
       aria-modal="true"
     >
       <div
-        className={`card-elev w-full ${widths[size]} max-h-[90vh] flex flex-col animate-[slideUp_180ms_ease-out]`}
+        ref={cardRef}
+        tabIndex={-1}
+        className={`card-elev w-full ${widths[size]} max-h-[90vh] flex flex-col animate-[slideUp_180ms_ease-out] outline-none`}
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between px-6 py-4 border-b border-charcoal-100">

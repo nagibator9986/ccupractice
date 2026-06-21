@@ -47,6 +47,12 @@ export default function StudentsPage() {
       const [s, p] = await Promise.all([studentsApi.list({ q }), partnersApi.list()]);
       setItems(s.items);
       setPartners(p.items);
+    } catch (e) {
+      const st = e.response?.status;
+      if (st !== 401 && st !== 422)
+        toast.error(e.response?.data?.error || "Не удалось загрузить студентов");
+      setItems([]);
+      setPartners([]);
     } finally {
       setLoading(false);
     }

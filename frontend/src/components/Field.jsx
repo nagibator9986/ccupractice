@@ -13,9 +13,9 @@ export function Field({ label, children, span = 1, hint }) {
   );
 }
 
-export function TextField({ label, value, onChange, type = "text", hint, ...rest }) {
+export function TextField({ label, value, onChange, type = "text", hint, span, ...rest }) {
   return (
-    <Field label={label} hint={hint}>
+    <Field label={label} hint={hint} span={span}>
       <input
         type={type}
         className="input"
@@ -27,9 +27,9 @@ export function TextField({ label, value, onChange, type = "text", hint, ...rest
   );
 }
 
-export function TextArea({ label, value, onChange, rows = 3, hint, ...rest }) {
+export function TextArea({ label, value, onChange, rows = 3, hint, span, ...rest }) {
   return (
-    <Field label={label} hint={hint}>
+    <Field label={label} hint={hint} span={span}>
       <textarea
         className="input"
         value={value ?? ""}
@@ -41,13 +41,14 @@ export function TextArea({ label, value, onChange, rows = 3, hint, ...rest }) {
   );
 }
 
-export function SelectField({ label, value, onChange, options = [], placeholder = "—", hint }) {
+export function SelectField({ label, value, onChange, options = [], placeholder = "—", hint, span, disabled }) {
   return (
-    <Field label={label} hint={hint}>
+    <Field label={label} hint={hint} span={span}>
       <select
         className="input"
         value={value ?? ""}
         onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
       >
         <option value="">{placeholder}</option>
         {options.map((o) => (

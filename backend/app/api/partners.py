@@ -1,8 +1,9 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from ..extensions import db
-from ..models import Partner, Student
+from ..models import Partner, Student, Contract
 from ..utils.auth import admin_required
 from ..utils.serializers import (
     clean_str,
@@ -75,7 +76,11 @@ def create_partner():
     partner = Partner(organization_name=name, bin=bin_value)
     _apply(partner, data, skip=("organization_name", "bin"))
     db.session.add(partner)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify(error=f"Партнёр с БИН {bin_value} уже существует"), 409
     return jsonify(item=partner.to_dict()), 201
 
 
@@ -97,7 +102,11 @@ def update_partner(pid):
                 return jsonify(error=f"Партнёр с БИН {bin_value} уже существует"), 409
         partner.bin = bin_value
     _apply(partner, data, skip=("organization_name", "bin"))
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify(error="Партнёр с таким БИН уже существует"), 409
     return jsonify(item=partner.to_dict())
 
 
@@ -105,9 +114,10 @@ def update_partner(pid):
 @admin_required
 def delete_partner(pid):
     partner = Partner.query.get_or_404(pid)
-    if partner.contracts:
+    contracts_count = Contract.query.filter_by(partner_id=pid).count()
+    if contracts_count:
         return jsonify(
-            error=f"Нельзя удалить партнёра — связаны {len(partner.contracts)} договор(ов). Сначала удалите или переназначьте их."
+            error=f"Нельзя удалить партнёра — связаны {contracts_count} договор(ов). Сначала удалите или переназначьте их."
         ), 409
     # Block deletion if students reference this partner — otherwise SQLAlchemy
     # nullifies their partner_id and we lose the link silently.
@@ -117,7 +127,13 @@ def delete_partner(pid):
             error=f"Нельзя удалить партнёра — у него {students_count} студент(ов). Сначала переназначьте студентов другому партнёру."
         ), 409
     db.session.delete(partner)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # A contract referencing this partner was inserted between the check and
+        # the delete (the NOT NULL FK then rejects the delete). Report cleanly.
+        db.session.rollback()
+        return jsonify(error="Нельзя удалить партнёра — есть связанные договоры."), 409
     return jsonify(ok=True)
 
 

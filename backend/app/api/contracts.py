@@ -1,4 +1,3 @@
-from datetime import date, datetime
 from pathlib import Path
 
 from flask import Blueprint, current_app, jsonify, request, send_from_directory
@@ -13,11 +12,24 @@ from ..services.signature_report import build_signature_report
 from ..utils.auth import admin_required
 from ..utils.files import safe_filename
 from ..utils.serializers import clean_str, get_json_safe, parse_date, parse_int
-from ..utils.time import utc_now
+from ..utils.time import utc_now, utc_today
 
 bp = Blueprint("contracts", __name__)
 
 _ALLOWED_SCAN_EXT = {"pdf", "jpg", "jpeg", "png"}
+
+# Allowed manual status transitions for PUT /contracts/<id>. The SIGNED state is
+# owned exclusively by the signing flow (it is entered only when all three roles
+# have a verified Signature, and left only via a forced regeneration reset), so
+# it can never be a manual target. A no-op write (same status) is always allowed.
+_ALLOWED_STATUS_TRANSITIONS = {
+    ContractStatus.DRAFT: {ContractStatus.GENERATED},
+    ContractStatus.GENERATED: {ContractStatus.SENT, ContractStatus.DRAFT},
+    ContractStatus.SENT: {ContractStatus.GENERATED, ContractStatus.COMPLETED},
+    ContractStatus.SIGNED: {ContractStatus.COMPLETED},
+    ContractStatus.SCAN_UPLOADED: {ContractStatus.COMPLETED},
+    ContractStatus.COMPLETED: {ContractStatus.SCAN_UPLOADED},
+}
 
 
 @bp.get("")
@@ -80,7 +92,7 @@ def create_contract():
     if not student:
         return jsonify(error=f"Студент с id={student_id} не найден"), 404
 
-    contract_date = parse_date(data.get("contract_date")) or date.today()
+    contract_date = parse_date(data.get("contract_date")) or utc_today()
 
     # Allocate the number + insert with a bounded retry: under concurrent
     # creation two requests can race on the per-year counter and collide on the
@@ -117,7 +129,17 @@ def update_contract(cid):
         new_status = data["status"]
         if new_status not in ContractStatus.ALL:
             return jsonify(error=f"Неизвестный статус: {new_status}"), 400
-        contract.status = new_status
+        current = contract.status
+        if new_status != current:
+            allowed = _ALLOWED_STATUS_TRANSITIONS.get(current, set())
+            if new_status not in allowed:
+                cur_label = ContractStatus.LABELS.get(current, current)
+                new_label = ContractStatus.LABELS.get(new_status, new_status)
+                return jsonify(
+                    error=f"Недопустимый переход статуса: «{cur_label}» → «{new_label}»",
+                    code="invalid_status_transition",
+                ), 409
+            contract.status = new_status
     if "notes" in data:
         contract.notes = clean_str(data.get("notes"))
     if "contract_date" in data:

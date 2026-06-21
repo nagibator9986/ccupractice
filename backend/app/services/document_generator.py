@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -105,20 +106,49 @@ def _archive_filename(contract: Contract, ext: str) -> str:
 
 
 def _convert_to_pdf(docx_path: Path) -> Path | None:
-    """Best-effort DOCX -> PDF conversion using LibreOffice (`soffice`)."""
+    """Best-effort DOCX -> PDF conversion using LibreOffice (`soffice`).
+
+    Each call runs with a throwaway, isolated LibreOffice user profile
+    (``-env:UserInstallation``). Gunicorn runs several workers/threads that share
+    one ``$HOME``; without an isolated profile concurrent conversions serialise
+    on (or abort against) the ``~/.config/libreoffice`` lockfile, intermittently
+    dropping PDFs under load. Failure modes are logged distinctly instead of
+    being silently swallowed so the cause is diagnosable from the server log.
+    """
     pdf_path = docx_path.with_suffix(".pdf")
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
     if not soffice:
+        current_app.logger.warning(
+            "PDF conversion skipped: neither 'soffice' nor 'libreoffice' found on PATH"
+        )
         return None
     try:
-        subprocess.run(
-            [soffice, "--headless", "--convert-to", "pdf", "--outdir", str(docx_path.parent), str(docx_path)],
-            check=True,
-            timeout=120,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        with tempfile.TemporaryDirectory(prefix="lo_profile_") as profile_dir:
+            subprocess.run(
+                [
+                    soffice,
+                    "-env:UserInstallation=" + Path(profile_dir).as_uri(),
+                    "--headless",
+                    "--convert-to", "pdf",
+                    "--outdir", str(docx_path.parent),
+                    str(docx_path),
+                ],
+                check=True,
+                timeout=120,
+                capture_output=True,
+                text=True,
+            )
+    except subprocess.TimeoutExpired:
+        current_app.logger.error("PDF conversion timed out after 120s for %s", docx_path)
+        return None
+    except subprocess.CalledProcessError as e:
+        current_app.logger.error(
+            "PDF conversion failed (exit %s) for %s: %s",
+            e.returncode, docx_path, (e.stderr or "").strip(),
         )
+        return None
     except Exception:
+        current_app.logger.exception("PDF conversion crashed for %s", docx_path)
         return None
     return pdf_path if pdf_path.exists() else None
 
@@ -136,8 +166,20 @@ def generate_contract_files(contract: Contract) -> Contract:
 
     contract.docx_path = str(docx_full.relative_to(current_app.config["ARCHIVE_FOLDER"]))
 
-    pdf_full = _convert_to_pdf(docx_full)
-    if pdf_full:
-        contract.pdf_path = str(pdf_full.relative_to(current_app.config["ARCHIVE_FOLDER"]))
+    # The DOCX was just rewritten, so any previously produced PDF is now stale.
+    # Clear pdf_path first and delete the deterministic old file BEFORE trying to
+    # reconvert, so a failed reconversion can never leave a downloadable PDF that
+    # no longer matches the (signable) DOCX bytes.
+    contract.pdf_path = None
+    stale_pdf = docx_full.with_suffix(".pdf")
+    try:
+        if stale_pdf.is_file():
+            stale_pdf.unlink()
+    except OSError as exc:
+        current_app.logger.warning("Failed to remove stale PDF %s: %s", stale_pdf, exc)
+
+    produced_pdf = _convert_to_pdf(docx_full)
+    if produced_pdf:
+        contract.pdf_path = str(produced_pdf.relative_to(current_app.config["ARCHIVE_FOLDER"]))
 
     return contract

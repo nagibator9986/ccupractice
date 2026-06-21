@@ -1,4 +1,4 @@
-"""Build a human-readable PDF/DOCX 'Signature audit report' for a contract.
+"""Build a human-readable DOCX 'Signature audit report' for a contract.
 
 The report lists each signing party, the cryptographic identity extracted
 from the CMS, the SHA-256 hash of the signed payload, and a timestamp.

@@ -24,6 +24,12 @@ export default function ArchivePage() {
         const data = await archiveApi.tree();
         setTree(data.tree);
       }
+    } catch (e) {
+      const s = e.response?.status;
+      if (s !== 401 && s !== 422)
+        toast.error(e.response?.data?.error || "Не удалось загрузить архив");
+      if (view === "list") setItems([]);
+      else setTree({});
     } finally {
       setLoading(false);
     }
@@ -62,7 +68,15 @@ export default function ArchivePage() {
       {view === "list" && (
         <div className="card p-4 mb-4 flex flex-wrap gap-3">
           <input className="input flex-1 min-w-[240px]" placeholder="Поиск" value={q} onChange={(e) => setQ(e.target.value)} />
-          <input className="input w-32" placeholder="Год" value={year} onChange={(e) => setYear(e.target.value)} />
+          <input
+            className="input w-32"
+            placeholder="Год"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={4}
+            value={year}
+            onChange={(e) => setYear(e.target.value.replace(/\D/g, ""))}
+          />
         </div>
       )}
 

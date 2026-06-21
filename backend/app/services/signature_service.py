@@ -63,6 +63,14 @@ _HASH_BY_OID = {
     "sha512": hashes.SHA512,
 }
 
+# The messageDigest signed attribute is the load-bearing tamper/replay binding
+# between the signature and the exact document bytes. SHA-1 / SHA-224 are
+# collision-weakened, so we refuse to treat them as a valid document binding for
+# a legally significant contract. NCALayer CAdES uses SHA-256, so this rejects
+# nothing legitimate. _HASH_BY_OID itself stays complete (it is also used by the
+# RSA/ECDSA signature check, where the hash is dictated by the algorithm).
+_STRONG_DIGESTS = {"sha256", "sha384", "sha512"}
+
 
 def _hash(payload_bytes: bytes, algo: str) -> bytes:
     algo = algo.lower()
@@ -277,6 +285,11 @@ def parse_cms_signature(cms_b64: str, payload_bytes: bytes) -> ParsedSignature:
 
     # 2) Verify messageDigest signed attribute matches SHA-(digest) of payload.
     digest_algo = signer_info["digest_algorithm"]["algorithm"].native
+    if str(digest_algo).lower() not in _STRONG_DIGESTS:
+        raise SignatureError(
+            f"Слабый алгоритм хэширования подписи: {digest_algo}. "
+            "Требуется SHA-256 или сильнее."
+        )
     expected_digest = _hash(payload_bytes, digest_algo)
 
     signed_attrs = signer_info["signed_attrs"]
@@ -287,10 +300,18 @@ def parse_cms_signature(cms_b64: str, payload_bytes: bytes) -> ParsedSignature:
     content_type_value = None
     for attr in signed_attrs:
         name = attr["type"].native
+        # A SignedAttribute is a SET that may legally be empty. Indexing [0]
+        # blindly would raise IndexError (not SignatureError) on a crafted CMS,
+        # which the callers don't catch — surfacing as an unhandled 500 / DoS on
+        # the unauthenticated public submit endpoint. Guard before indexing.
+        values = attr["values"]
         if name == "message_digest":
-            md_value = attr["values"][0].native
+            if not values or len(values) == 0:
+                raise SignatureError("Атрибут messageDigest не содержит значения")
+            md_value = values[0].native
         elif name == "content_type":
-            content_type_value = attr["values"][0].native
+            if values and len(values) > 0:
+                content_type_value = values[0].native
 
     if md_value is None:
         raise SignatureError("В подписи отсутствует messageDigest")
@@ -337,16 +358,22 @@ def parse_cms_signature(cms_b64: str, payload_bytes: bytes) -> ParsedSignature:
     except Exception as e:
         raise SignatureError(f"Не удалось проверить подпись: {e}") from e
 
-    # 4) Validity period check (non-fatal warning if the cert is past validity).
-    # cryptography >= 42 always exposes the tz-aware *_utc accessors; keep
-    # everything tz-aware and avoid the deprecated datetime.utcnow().
+    # 4) Validity period check. Without a verified TSA timestamp (we don't
+    # request one) there is no evidence the signature was produced while the
+    # certificate was valid, so an expired / not-yet-valid certificate must NOT
+    # produce a binding signature for a legal contract — reject it outright.
+    # cryptography >= 42 always exposes the tz-aware *_utc accessors (never None).
     not_before = cert.not_valid_before_utc
     not_after = cert.not_valid_after_utc
     now = datetime.now(timezone.utc)
-    if not_before and now < not_before:
-        warnings.append(f"Сертификат ещё не действителен (с {not_before.isoformat()})")
-    if not_after and now > not_after:
-        warnings.append(f"Сертификат просрочен (истёк {not_after.isoformat()})")
+    if now < not_before:
+        raise SignatureError(
+            f"Сертификат подписанта ещё не действителен (действует с {not_before.isoformat()})"
+        )
+    if now > not_after:
+        raise SignatureError(
+            f"Сертификат подписанта просрочен (истёк {not_after.isoformat()})"
+        )
 
     full_name = _full_name_from_cert(cert)
     iin_or_bin = _iin_bin_from_cert(cert)

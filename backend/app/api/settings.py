@@ -1,3 +1,4 @@
+import zipfile
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import jwt_required
 from pathlib import Path
@@ -65,7 +66,26 @@ def upload_template():
         name = name + ".docx"
     dest = Path(current_app.config["TEMPLATES_FOLDER"]) / name
     dest.parent.mkdir(parents=True, exist_ok=True)
-    f.save(str(dest))
+
+    # Save to a temp path and validate it's a real DOCX (an OOXML ZIP containing
+    # word/document.xml) BEFORE replacing the active template. A renamed PDF or
+    # corrupt file would otherwise be accepted and then 500 inside DocxTemplate
+    # on every later contract generation. tmp.replace() is atomic, so the
+    # previously-active template survives an invalid upload.
+    tmp = dest.with_name(dest.name + ".uploading")
+    f.save(str(tmp))
+    try:
+        with zipfile.ZipFile(tmp) as z:
+            if "word/document.xml" not in z.namelist():
+                raise zipfile.BadZipFile("missing word/document.xml")
+    except zipfile.BadZipFile:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return jsonify(error="Файл не является корректным .docx"), 400
+    tmp.replace(dest)
+
     s = CollegeSettings.query.first()
     if not s:
         s = CollegeSettings()

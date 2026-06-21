@@ -24,11 +24,15 @@ const NCALAYER_URLS =
 const CONNECT_TIMEOUT_MS = 4000;
 const SIGN_TIMEOUT_MS = 5 * 60 * 1000; // 5 min — covers PIN entry / token confirmation
 
-function openSocket() {
+function openSocket(signal) {
   return new Promise((resolve, reject) => {
     let lastError = null;
     let idx = 0;
     const tryNext = () => {
+      if (signal?.aborted) {
+        reject(new Error("Подписание отменено"));
+        return;
+      }
       if (idx >= NCALAYER_URLS.length) {
         reject(
           new Error(
@@ -40,6 +44,10 @@ function openSocket() {
       }
       const url = NCALAYER_URLS[idx++];
       let ws;
+      // Per-attempt guard so neither the timeout nor a late onerror can fire
+      // after onopen has already resolved (which would spawn an orphan second
+      // socket while the caller is using the first).
+      let settled = false;
       try {
         ws = new WebSocket(url);
       } catch (e) {
@@ -47,16 +55,25 @@ function openSocket() {
         tryNext();
         return;
       }
+      if (signal) {
+        signal.addEventListener("abort", () => { try { ws.close(); } catch {} }, { once: true });
+      }
       const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         try { ws.close(); } catch {}
         lastError = new Error(`Timeout NCALayer at ${url}`);
         tryNext();
       }, CONNECT_TIMEOUT_MS);
       ws.onopen = () => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         resolve(ws);
       };
       ws.onerror = () => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         lastError = new Error(`NCALayer недоступен по ${url}`);
         try { ws.close(); } catch {}
@@ -123,18 +140,21 @@ function extractError(data) {
  * Returns the base64-encoded CMS ready to be sent to backend.
  *
  * options.attachData (default true) — wraps the data into the CMS structure.
- * options.signalAbort — AbortSignal to cancel a hanging request.
+ * options.signal — AbortSignal to cancel a hanging request (connect + wait).
  */
 export async function signBase64WithNCALayer(payloadBase64, options = {}) {
   const { attachData = true, signal } = options;
-  const ws = await openSocket();
+  if (signal?.aborted) throw new Error("Подписание отменено");
+  const ws = await openSocket(signal);
 
   return new Promise((resolve, reject) => {
     let done = false;
+    let onAbort = null;
     const finish = (fn, value) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
       try { ws.close(); } catch {}
       fn(value);
     };
@@ -146,7 +166,7 @@ export async function signBase64WithNCALayer(payloadBase64, options = {}) {
     }, SIGN_TIMEOUT_MS);
 
     if (signal) {
-      const onAbort = () => finish(reject, new Error("Подписание отменено"));
+      onAbort = () => finish(reject, new Error("Подписание отменено"));
       if (signal.aborted) return onAbort();
       signal.addEventListener("abort", onAbort, { once: true });
     }

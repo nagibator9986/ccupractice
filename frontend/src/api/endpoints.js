@@ -43,7 +43,6 @@ export const contractsApi = {
       })
       .then((r) => r.data);
   },
-  downloadUrl: (id, fmt) => `${API_PREFIX}/contracts/${id}/download/${fmt}`,
   download: async (id, fmt, filename) => {
     const res = await client.get(`/contracts/${id}/download/${fmt}`, {
       responseType: "blob",
@@ -103,11 +102,56 @@ export const signingApi = {
     client.post(`/signing/requests/${requestId}/resend`).then((r) => r.data),
   publicView: (token) =>
     client.get(`/signing/public/${token}`).then((r) => r.data),
+  publicMarkViewed: (token) =>
+    client.post(`/signing/public/${token}/view`).then((r) => r.data),
   publicPayload: (token) =>
     client.get(`/signing/public/${token}/payload`).then((r) => r.data),
   publicSubmit: (token, cms) =>
     client.post(`/signing/public/${token}/submit`, { cms }).then((r) => r.data),
   publicDownloadUrl: (token, fmt) => `${API_PREFIX}/signing/public/${token}/download/${fmt}`,
+};
+
+async function blobDownload(url, filename) {
+  const res = await client.get(url, { responseType: "blob" });
+  const objUrl = URL.createObjectURL(res.data);
+  const a = document.createElement("a");
+  a.href = objUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(objUrl), 1500);
+}
+
+export const enrollmentsApi = {
+  list: (params) => client.get("/enrollments", { params }).then((r) => r.data),
+  get: (id) => client.get(`/enrollments/${id}`).then((r) => r.data),
+  suggestNumber: (year) =>
+    client.get("/enrollments/suggest-number", { params: { year } }).then((r) => r.data),
+  create: (data) => client.post("/enrollments", data).then((r) => r.data),
+  update: (id, data) => client.put(`/enrollments/${id}`, data).then((r) => r.data),
+  generate: (id, payload) =>
+    client.post(`/enrollments/${id}/generate`, payload || {}).then((r) => r.data),
+  remove: (id) => client.delete(`/enrollments/${id}`).then((r) => r.data),
+  downloadDoc: (id, document, fmt, filename) =>
+    blobDownload(`/enrollments/${id}/download/${document}/${fmt}`, filename),
+  invite: (id, payload) =>
+    client.post(`/enrollments/${id}/invite`, payload || {}).then((r) => r.data),
+  listRequests: (id) =>
+    client.get(`/enrollments/${id}/requests`).then((r) => r.data),
+  revoke: (rid) => client.post(`/enrollments/requests/${rid}/revoke`).then((r) => r.data),
+  resend: (rid) => client.post(`/enrollments/requests/${rid}/resend`).then((r) => r.data),
+  // Public (token-based) signing flow:
+  publicView: (token) =>
+    client.get(`/enrollments/public/${token}`).then((r) => r.data),
+  publicMarkViewed: (token) =>
+    client.post(`/enrollments/public/${token}/view`).then((r) => r.data),
+  publicPayload: (token, document) =>
+    client.get(`/enrollments/public/${token}/payload/${document}`).then((r) => r.data),
+  publicSubmit: (token, document, cms) =>
+    client.post(`/enrollments/public/${token}/submit/${document}`, { cms }).then((r) => r.data),
+  publicDownloadUrl: (token, document, fmt) =>
+    `${API_PREFIX}/enrollments/public/${token}/download/${document}/${fmt}`,
 };
 
 export const signaturesApi = {

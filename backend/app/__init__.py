@@ -4,10 +4,10 @@ from datetime import timedelta
 from pathlib import Path
 from flask import Flask, send_from_directory, jsonify, request
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager
+from flask_jwt_extended import JWTManager, jwt_required
 from dotenv import load_dotenv
 from sqlalchemy import event
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 
 from .extensions import db, migrate
 
@@ -27,14 +27,25 @@ def _enable_sqlite_fk(dbapi_connection, _conn_record):
 
 
 def _persistent_secret(name: str, instance_dir: Path) -> str:
-    """Read SECRET / JWT key from env, else lazy-generate to instance/ file.
+    """Read SECRET / JWT key from env; in dev fall back to a generated instance/ file.
 
-    In production set SECRET_KEY / JWT_SECRET_KEY via Railway env vars so the
-    value survives across redeploys (instance/ may be ephemeral).
+    In production (FLASK_DEBUG off) the env var is REQUIRED and we fail fast if
+    it's missing: instance/ is typically ephemeral and per-container, so a
+    generated key would change on every redeploy (force-logging-out everyone)
+    and differ between replicas (a token minted by one worker is rejected by
+    another). Set SECRET_KEY / JWT_SECRET_KEY as cluster-wide env vars.
     """
     env_val = os.getenv(name)
     if env_val:
         return env_val
+
+    is_debug = os.getenv("FLASK_DEBUG", "0").strip().lower() in ("1", "true", "yes")
+    if not is_debug:
+        raise RuntimeError(
+            f"{name} is not set. It must be provided as an environment variable in "
+            "production and be identical across all workers, replicas and redeploys."
+        )
+
     secret_file = instance_dir / f".{name.lower()}"
     if secret_file.exists():
         return secret_file.read_text().strip()
@@ -48,10 +59,24 @@ def _persistent_secret(name: str, instance_dir: Path) -> str:
     return value
 
 
-def _normalize_db_url(url: str) -> str:
-    """Railway / Heroku style `postgres://` → SQLAlchemy `postgresql://`."""
+def _normalize_db_url(url: str, base_dir: Path) -> str:
+    """Normalise the database URL.
+
+    - Railway / Heroku style `postgres://` → SQLAlchemy `postgresql://`.
+    - Anchor a RELATIVE sqlite path (``sqlite:///instance/ccu.db``) to base_dir.
+      SQLAlchemy otherwise resolves it against the process CWD, so running
+      ``flask db ...``, pytest from the repo root, or any tooling that doesn't
+      chdir into backend/ would point at a different (often non-existent) file
+      and fail with "unable to open database file".
+    """
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
+    # 3 slashes (sqlite:///) = relative path; 4 (sqlite:////) = absolute.
+    prefix = "sqlite:///"
+    if url.startswith(prefix) and not url.startswith("sqlite:////"):
+        rel = url[len(prefix):]
+        if rel and rel != ":memory:" and not os.path.isabs(rel):
+            url = prefix + str((base_dir / rel).resolve())
     return url
 
 
@@ -74,7 +99,7 @@ def create_app() -> Flask:
     instance_dir = Path(app.instance_path)
 
     default_db = f"sqlite:///{base_dir / 'instance' / 'ccu.db'}"
-    db_url = _normalize_db_url(os.getenv("DATABASE_URL") or default_db)
+    db_url = _normalize_db_url(os.getenv("DATABASE_URL") or default_db, base_dir)
 
     app.config.update(
         SECRET_KEY=_persistent_secret("SECRET_KEY", instance_dir),
@@ -147,6 +172,7 @@ def create_app() -> Flask:
     from .api.settings import bp as settings_bp
     from .api.signatures import bp as signatures_bp
     from .api.signing import bp as signing_bp
+    from .api.enrollment import bp as enrollment_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(partners_bp, url_prefix="/api/partners")
@@ -156,21 +182,42 @@ def create_app() -> Flask:
     app.register_blueprint(settings_bp, url_prefix="/api/settings")
     app.register_blueprint(signatures_bp, url_prefix="/api/signatures")
     app.register_blueprint(signing_bp, url_prefix="/api/signing")
+    app.register_blueprint(enrollment_bp, url_prefix="/api/enrollments")
 
     @app.get("/api/health")
     def health():
         return jsonify(status="ok", service="CCU PRACTICUM")
 
-    # Railway / load-balancer health probe (no DB roundtrip).
+    # Liveness probe — process is up (no DB roundtrip).
     @app.get("/healthz")
     def healthz():
         return jsonify(status="ok")
 
+    # Readiness probe — the DB is reachable. Point the platform's readiness
+    # check here so a broken-DB deploy is marked unhealthy instead of serving
+    # 500s behind a green /healthz.
+    @app.get("/readyz")
+    def readyz():
+        try:
+            db.session.execute(db.text("SELECT 1"))
+            return jsonify(status="ready")
+        except Exception as exc:  # noqa: BLE001
+            app.logger.warning("Readiness check failed: %s", exc)
+            db.session.rollback()
+            return jsonify(status="not-ready"), 503
+
+    # These expose archived contracts / uploaded signed scans (contract PII).
+    # They MUST require auth — the SPA never uses them (it downloads via the
+    # JWT-protected /api/contracts/<id>/download and the token-scoped public
+    # signing routes), so without a guard they were an unauthenticated read of
+    # every document to anyone who can guess a filename.
     @app.get("/api/files/archive/<path:filename>")
+    @jwt_required()
     def archive_file(filename):
         return send_from_directory(app.config["ARCHIVE_FOLDER"], filename, as_attachment=True)
 
     @app.get("/api/files/upload/<path:filename>")
+    @jwt_required()
     def upload_file(filename):
         return send_from_directory(app.config["UPLOAD_FOLDER"], filename, as_attachment=True)
 
@@ -191,27 +238,47 @@ def create_app() -> Flask:
                 return send_from_directory(str(frontend_dist), path)
             return send_from_directory(str(frontend_dist), "index.html")
 
+    # Ensure the SQLite parent directory exists before we touch the DB (Postgres
+    # ignores this). Anchored absolute path comes from _normalize_db_url.
+    try:
+        url_obj = make_url(db_url)
+        if url_obj.get_backend_name() == "sqlite" and url_obj.database and url_obj.database != ":memory:":
+            Path(url_obj.database).parent.mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+
     with app.app_context():
-        # Auto-bootstrap on first run. For Postgres in multi-worker setups
-        # this is idempotent; race is harmless because IntegrityErrors on the
-        # seed are swallowed by the unique constraints + rollback.
+        # Bootstrap the schema on startup. Prefer real Alembic migrations when a
+        # migrations/versions/ tree exists (so an evolving Postgres schema can be
+        # ALTERed via `flask db upgrade`); otherwise fall back to create_all()
+        # for a from-scratch dev DB. Seed default accounts/settings afterwards.
         if os.getenv("SKIP_DB_INIT", "").lower() not in ("1", "true", "yes"):
             try:
-                db.create_all()
+                migrations_dir = base_dir / "migrations"
+                versions_dir = migrations_dir / "versions"
+                if versions_dir.is_dir() and any(versions_dir.glob("*.py")):
+                    from flask_migrate import upgrade as _alembic_upgrade
+                    _alembic_upgrade(directory=str(migrations_dir))
+                else:
+                    db.create_all()
                 from .services.bootstrap import ensure_seed_data
                 ensure_seed_data()
             except Exception as exc:  # noqa: BLE001
-                # On first boot multiple gunicorn workers run create_all()
-                # concurrently (run:app is imported per-worker, no --preload).
-                # create_all() uses checkfirst=True, so there is a TOCTOU window
-                # where the losing worker raises "table already exists". That is
-                # benign — log it quietly instead of an error-level traceback
-                # that pollutes logs / trips alerting.
-                if "already exists" in str(exc).lower():
+                # On first boot multiple gunicorn workers bootstrap concurrently
+                # (run:app is imported per-worker, no --preload). create_all()
+                # uses checkfirst=True and migrations stamp the version table, so
+                # the loser of that race can raise "table already exists" /
+                # "duplicate". That is benign — log quietly. Any OTHER failure
+                # (unable to open DB, auth failure, missing driver) is fatal:
+                # re-raise so the worker exits non-zero and the orchestrator marks
+                # the deploy failed instead of serving 500s behind a green probe.
+                msg = str(exc).lower()
+                if "already exists" in msg or "duplicate" in msg:
                     app.logger.info(
                         "DB schema already present (concurrent worker bootstrap): %s", exc
                     )
                 else:
                     app.logger.exception("DB bootstrap failed: %s", exc)
+                    raise
 
     return app

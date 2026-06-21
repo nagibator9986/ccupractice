@@ -25,7 +25,7 @@ client.interceptors.request.use((config) => {
 
 // Paths that NEVER trigger an auto-logout even on 401 (public signing flow
 // is intentionally token-based and lives outside the auth-protected area).
-const PUBLIC_PATHS = ["/signing/public/", "/auth/login"];
+const PUBLIC_PATHS = ["/signing/public/", "/enrollments/public/", "/auth/login"];
 
 client.interceptors.response.use(
   (r) => r,

@@ -31,6 +31,11 @@ export default function ContractsPage() {
     try {
       const data = await contractsApi.list(filters);
       setItems(data.items);
+    } catch (e) {
+      const s = e.response?.status;
+      if (s !== 401 && s !== 422)
+        toast.error(e.response?.data?.error || "Не удалось загрузить договоры");
+      setItems([]);
     } finally {
       setLoading(false);
     }
@@ -41,8 +46,10 @@ export default function ContractsPage() {
       const [p, s] = await Promise.all([partnersApi.list(), studentsApi.list()]);
       setPartners(p.items);
       setStudents(s.items);
-    } catch {
-      /* ignore */
+    } catch (e) {
+      const s = e.response?.status;
+      if (s !== 401 && s !== 422)
+        toast.error("Не удалось загрузить списки партнёров и студентов");
     }
   }
 

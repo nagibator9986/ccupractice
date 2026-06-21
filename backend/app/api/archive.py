@@ -25,9 +25,12 @@ def list_archive():
         )
     if year:
         try:
-            query = query.filter(Contract.year == int(year))
-        except ValueError:
-            pass
+            year_int = int(year)
+        except (TypeError, ValueError):
+            # Don't silently ignore a malformed year and return the FULL archive,
+            # which looks like "the filter worked, there are just many results".
+            return jsonify(error="Параметр «year» должен быть числом"), 400
+        query = query.filter(Contract.year == year_int)
 
     items = []
     base = Path(current_app.config["ARCHIVE_FOLDER"])

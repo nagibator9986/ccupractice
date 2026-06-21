@@ -95,33 +95,34 @@ def invite(cid: int):
     for role in requested_roles:
         if role not in ALLOWED_ROLES:
             continue
-        if role in signed_roles and not force:
-            continue
-        if role in signed_roles and force:
-            # Force re-sign: drop the existing Signature so the new submit can
-            # insert without colliding with uq_signature_contract_role
-            # (otherwise the new link looks valid but every submit 409s).
-            old_sig = Signature.query.filter_by(contract_id=cid, signer_role=role).first()
-            if old_sig:
-                # Detach any request still pointing at this signature first, so
-                # the FK doesn't dangle on SQLite (no ON DELETE SET NULL there).
-                SigningRequest.query.filter_by(signature_id=old_sig.id).update(
-                    {"signature_id": None}
-                )
-                db.session.delete(old_sig)
-                if contract.status == ContractStatus.SIGNED:
-                    contract.status = ContractStatus.SENT
 
         active = SigningRequest.query.filter_by(contract_id=cid, signer_role=role).filter(
             SigningRequest.status.in_(("pending", "viewed"))
         ).first()
-        if active:
-            if not force:
-                continue
-            # Revoke the previous link so the old token can't be used after we
-            # issue a fresh one.
-            active.status = "revoked"
-            active.revoked_at = utc_now()
+
+        # Without force: never re-issue for a role that is already signed or that
+        # has a live (pending/viewed) link.
+        if not force and (role in signed_roles or active):
+            continue
+
+        if force:
+            # Force re-sign: revoke EVERY prior non-revoked link for this role —
+            # pending, viewed AND signed — so no stale token keeps leaking the
+            # document, and no duplicate same-role row makes the public
+            # signing_state non-deterministic. Then drop the existing Signature
+            # so the fresh submit can insert without colliding with the
+            # (contract_id, signer_role) unique constraint.
+            SigningRequest.query.filter_by(contract_id=cid, signer_role=role).filter(
+                SigningRequest.status.in_(("pending", "viewed", "signed"))
+            ).update(
+                {"status": "revoked", "revoked_at": utc_now(), "signature_id": None},
+                synchronize_session=False,
+            )
+            old_sig = Signature.query.filter_by(contract_id=cid, signer_role=role).first()
+            if old_sig:
+                db.session.delete(old_sig)
+                if contract.status == ContractStatus.SIGNED:
+                    contract.status = ContractStatus.SENT
 
         recipient = {**defaults.get(role, {}), **(custom.get(role) or {})}
         sr = SigningRequest.create_for(cid, role, recipient)
@@ -232,10 +233,10 @@ def public_view(token: str):
         return jsonify(error="Ссылка отозвана", code="revoked"), 410
 
     contract = sr.contract
-    if sr.status == "pending":
-        sr.status = "viewed"
-        sr.viewed_at = utc_now()
-        db.session.commit()
+    # NB: this GET is read-only on purpose. The pending->viewed transition is an
+    # explicit POST (/public/<token>/view) so that link-preview bots, URL
+    # scanners and browser prefetch can't silently corrupt the audit timeline,
+    # and the handler stays safe/idempotent (and not CSRF-triggerable via <img>).
 
     all_requests = SigningRequest.query.filter_by(contract_id=contract.id).all()
     summary = {
@@ -264,6 +265,25 @@ def public_view(token: str):
             "pdf": f"/api/signing/public/{token}/download/pdf" if contract.pdf_path else None,
         },
     )
+
+
+@bp.post("/public/<string:token>/view")
+def public_mark_viewed(token: str):
+    """Explicit, non-idempotent pending->viewed transition (called by the SPA
+    after a human opens the signing page). Kept out of the GET handler so the
+    audit timeline can't be corrupted by prefetch / bots / URL scanners."""
+    sr = _get_request(token)
+    if not sr:
+        return jsonify(error="Ссылка недействительна"), 404
+    if sr.is_expired:
+        return jsonify(error="Срок ссылки истёк", code="expired"), 410
+    if sr.status == "revoked":
+        return jsonify(error="Ссылка отозвана", code="revoked"), 410
+    if sr.status == "pending":
+        sr.status = "viewed"
+        sr.viewed_at = utc_now()
+        db.session.commit()
+    return jsonify(ok=True, status=sr.status)
 
 
 @bp.get("/public/<string:token>/payload")
@@ -390,24 +410,33 @@ def public_submit(token: str):
     sr.signed_at = utc_now()
     sr.signature_id = sig.id
 
-    # Auto-update contract status when all three roles signed. Count from the
-    # Signature table — the unique-constrained source of truth — so a mixed
-    # admin-attach + public-submit workflow (college signed via the admin
-    # endpoint creates a Signature but no "signed" SigningRequest) still flips
-    # the contract to SIGNED instead of getting stuck at SENT.
-    roles_signed = {
-        s.signer_role
-        for s in Signature.query.filter_by(contract_id=contract.id).all()
-    } | {sr.signer_role}
-    all_signed = {"college", "partner", "student"}.issubset(roles_signed)
-    if all_signed:
-        contract.status = ContractStatus.SIGNED
-
     try:
         db.session.commit()
     except (IntegrityError, OperationalError):
         db.session.rollback()
         return jsonify(error="Эта роль уже подписана другим запросом"), 409
+
+    # Auto-update contract status once all three roles are signed. Recompute from
+    # the COMMITTED Signature rows in a fresh read AFTER the commit above: under
+    # READ COMMITTED two simultaneous final submits for different roles would
+    # each see only their own (still-uncommitted) signature plus the
+    # already-committed ones — so each sees 2 of 3 and neither flips the status,
+    # leaving a fully-signed contract stuck at SENT. Computing after commit means
+    # whichever request commits last observes all rows and flips it (idempotent).
+    # Counting from the Signature table (the unique-constrained source of truth)
+    # also covers the mixed admin-attach + public-submit workflow.
+    signed_roles = {
+        s.signer_role
+        for s in Signature.query.filter_by(contract_id=contract.id).all()
+    }
+    all_signed = {"college", "partner", "student"}.issubset(signed_roles)
+    if all_signed and contract.status != ContractStatus.SIGNED:
+        contract.status = ContractStatus.SIGNED
+        try:
+            db.session.commit()
+        except (IntegrityError, OperationalError):
+            db.session.rollback()
+
     return jsonify(
         ok=True,
         signature=sig.to_dict(),

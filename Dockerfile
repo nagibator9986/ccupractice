@@ -58,7 +58,11 @@ COPY backend/ /app/backend/
 # Bring in the built frontend so Flask can serve it as static files.
 COPY --from=frontend-build /build/dist /app/frontend/dist
 
-# Persisted data dirs (mount a Railway Volume to /app/data to keep them).
+# Persisted data dirs. To keep them across redeploys, mount a Railway Volume at
+# EACH of these paths (or a single volume at /app/backend) — these exact
+# directories hold the SQLite DB + JWT/secret keys (instance/), uploaded scans
+# (uploads/) and generated contracts (archive/). A volume at /app/data would
+# persist nothing, since nothing is written there.
 RUN mkdir -p /app/backend/instance /app/backend/uploads /app/backend/archive
 
 ENV FRONTEND_DIST=/app/frontend/dist \

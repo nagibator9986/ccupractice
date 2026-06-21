@@ -10,13 +10,21 @@ export default function SettingsPage() {
   const [data, setData] = useState(null);
   const [templateInfo, setTemplateInfo] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
     (async () => {
-      const { item } = await settingsApi.getCollege();
-      setData(item);
-      const info = await settingsApi.templateInfo();
-      setTemplateInfo(info);
+      try {
+        const { item } = await settingsApi.getCollege();
+        setData(item);
+        const info = await settingsApi.templateInfo();
+        setTemplateInfo(info);
+      } catch (e) {
+        const s = e.response?.status;
+        setLoadError(true);
+        if (s !== 401 && s !== 422)
+          toast.error(e.response?.data?.error || "Не удалось загрузить настройки");
+      }
     })();
   }, []);
 
@@ -59,6 +67,12 @@ export default function SettingsPage() {
     }
   }
 
+  if (loadError && !data)
+    return (
+      <div className="text-red-600">
+        Не удалось загрузить настройки. Обновите страницу и попробуйте снова.
+      </div>
+    );
   if (!data) return <div className="text-slate-500">Загрузка…</div>;
 
   return (

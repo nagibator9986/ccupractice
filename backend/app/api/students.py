@@ -1,8 +1,9 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from ..extensions import db
-from ..models import Student, Partner
+from ..models import Student, Partner, Contract
 from ..utils.auth import admin_required
 from ..utils.serializers import (
     clean_str,
@@ -79,13 +80,19 @@ def create_student():
         return jsonify(error="ИИН должен содержать только цифры"), 400
     if iin and len(iin) != 12:
         return jsonify(error="ИИН должен состоять из 12 цифр"), 400
+    if iin and Student.query.filter_by(iin=iin).first():
+        return jsonify(error=f"Студент с ИИН {iin} уже существует"), 409
 
     student = Student(full_name=full_name, iin=iin)
     error = _apply(student, data, skip=("full_name", "iin"))
     if error:
         return jsonify(error=error), 400
     db.session.add(student)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify(error="Студент с таким ИИН уже существует"), 409
     return jsonify(item=student.to_dict()), 201
 
 
@@ -105,11 +112,17 @@ def update_student(sid):
             return jsonify(error="ИИН должен содержать только цифры"), 400
         if iin and len(iin) != 12:
             return jsonify(error="ИИН должен состоять из 12 цифр"), 400
+        if iin and Student.query.filter_by(iin=iin).filter(Student.id != sid).first():
+            return jsonify(error=f"Студент с ИИН {iin} уже существует"), 409
         student.iin = iin
     error = _apply(student, data, skip=("full_name", "iin"))
     if error:
         return jsonify(error=error), 400
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify(error="Студент с таким ИИН уже существует"), 409
     return jsonify(item=student.to_dict())
 
 
@@ -117,12 +130,19 @@ def update_student(sid):
 @admin_required
 def delete_student(sid):
     student = Student.query.get_or_404(sid)
-    if student.contracts:
+    contracts_count = Contract.query.filter_by(student_id=sid).count()
+    if contracts_count:
         return jsonify(
-            error=f"Нельзя удалить студента — связаны {len(student.contracts)} договор(ов)."
+            error=f"Нельзя удалить студента — связаны {contracts_count} договор(ов)."
         ), 409
     db.session.delete(student)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # A contract referencing this student was inserted between the check and
+        # the delete (the NOT NULL FK then rejects the delete). Report cleanly.
+        db.session.rollback()
+        return jsonify(error="Нельзя удалить студента — есть связанные договоры."), 409
     return jsonify(ok=True)
 
 

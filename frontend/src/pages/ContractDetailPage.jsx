@@ -614,9 +614,19 @@ function Stepper({ steps }) {
 
 function buildSteps(contract, requests) {
   const hasFile = !!contract.docx_path;
+  // Derive signed/sent state from data EVERY authenticated user receives
+  // (contract.signatures + contract.status), not the admin-only `requests`
+  // array — otherwise a viewer (who can't call the admin listRequests endpoint,
+  // so requests === []) sees a fully-signed contract rendered as not-signed.
+  const sigRoles = new Set((contract.signatures || []).map((s) => s.signer_role));
+  const allSigned =
+    ["college", "partner", "student"].every((r) => sigRoles.has(r)) ||
+    contract.status === "signed";
   const sentCount = requests.filter((r) => ["pending", "viewed"].includes(r.status)).length;
-  const signedRoles = new Set(requests.filter((r) => r.status === "signed").map((r) => r.signer_role));
-  const allSigned = ["college", "partner", "student"].every((r) => signedRoles.has(r));
+  const wasSent =
+    sentCount > 0 ||
+    sigRoles.size > 0 ||
+    ["sent", "signed", "scan_uploaded", "completed"].includes(contract.status);
   const hasScan = !!contract.signed_scan_path;
   const isCompleted = contract.status === "completed";
 
@@ -625,7 +635,7 @@ function buildSteps(contract, requests) {
   const steps = [
     { key: "draft", label: "Создан", done: true },
     { key: "generated", label: "Сформирован", done: hasFile },
-    { key: "sent", label: "Отправлен сторонам", done: sentCount > 0 || allSigned || hasScan || isCompleted },
+    { key: "sent", label: "Отправлен сторонам", done: wasSent || allSigned || hasScan || isCompleted },
     { key: "signed", label: "Подписан ЭЦП всеми", done: allSigned || hasScan || isCompleted },
     { key: "scan", label: "Скан загружен", done: hasScan || isCompleted },
     { key: "completed", label: "Завершён", done: isCompleted },

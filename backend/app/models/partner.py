@@ -8,7 +8,7 @@ class Partner(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     organization_name = db.Column(db.String(300), nullable=False, index=True)
-    bin = db.Column(db.String(20), index=True)
+    bin = db.Column(db.String(20), unique=True, index=True)
     legal_address = db.Column(db.String(500))
     actual_address = db.Column(db.String(500))
     director_full_name = db.Column(db.String(200))

@@ -18,6 +18,17 @@ export function formatDateTime(value) {
   });
 }
 
+// Russian numeral agreement for "год/года/лет".
+export function ruYears(n) {
+  if (n == null) return "лет";
+  const a = Math.abs(n) % 100;
+  const b = Math.abs(n) % 10;
+  if (a > 10 && a < 20) return "лет";
+  if (b === 1) return "год";
+  if (b >= 2 && b <= 4) return "года";
+  return "лет";
+}
+
 export const STATUS_COLORS = {
   draft: "bg-slate-100 text-slate-700",
   generated: "bg-blue-100 text-blue-700",

@@ -8,7 +8,7 @@ class Student(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     full_name = db.Column(db.String(200), nullable=False, index=True)
-    iin = db.Column(db.String(20), index=True)
+    iin = db.Column(db.String(20), unique=True, index=True)
     group_name = db.Column(db.String(60), index=True)
     specialty = db.Column(db.String(200))
     course = db.Column(db.Integer)

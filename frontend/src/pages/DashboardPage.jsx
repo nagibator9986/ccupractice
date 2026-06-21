@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import toast from "react-hot-toast";
 import PageHeader from "../components/PageHeader.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import { contractsApi, partnersApi, studentsApi } from "../api/endpoints.js";
@@ -24,6 +25,10 @@ export default function DashboardPage() {
         const drafts = c.items.filter((i) => ["draft", "generated", "sent"].includes(i.status)).length;
         setStats({ partners: p.total, students: s.total, contracts: c.total, signed, drafts });
         setRecent(c.items.slice(0, 6));
+      } catch (e) {
+        const s = e.response?.status;
+        if (s !== 401 && s !== 422)
+          toast.error(e.response?.data?.error || "Не удалось загрузить данные дашборда");
       } finally {
         setLoading(false);
       }
@@ -59,7 +64,10 @@ export default function DashboardPage() {
       label: "Подписаны ЭЦП",
       sub: "Завершённый документооборот",
       value: stats.signed,
-      to: "/contracts?status=signed",
+      // Card counts signed + scan_uploaded + completed; the list filter is a
+      // single exact-match status, so link to the full list to keep the count
+      // and the drill-down consistent.
+      to: "/contracts",
       icon: <IconSigned />,
       style: "from-emerald-500 to-emerald-700",
     },

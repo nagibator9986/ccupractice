@@ -39,6 +39,11 @@ export default function PartnersPage() {
     try {
       const data = await partnersApi.list({ q });
       setItems(data.items);
+    } catch (e) {
+      const s = e.response?.status;
+      if (s !== 401 && s !== 422)
+        toast.error(e.response?.data?.error || "Не удалось загрузить партнёров");
+      setItems([]);
     } finally {
       setLoading(false);
     }

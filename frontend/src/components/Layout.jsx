@@ -7,7 +7,8 @@ const NAV = [
   { to: "/", label: "Дашборд", icon: DashboardIcon, end: true },
   { to: "/partners", label: "Партнёры", icon: PartnersIcon },
   { to: "/students", label: "Студенты", icon: StudentsIcon },
-  { to: "/contracts", label: "Договоры", icon: ContractsIcon },
+  { to: "/contracts", label: "Договоры практики", icon: ContractsIcon },
+  { to: "/enrollments", label: "Договоры со студентами", icon: EnrollmentIcon },
   { to: "/archive", label: "Электронный архив", icon: ArchiveIcon },
   { to: "/settings", label: "Настройки", icon: SettingsIcon, adminOnly: true },
 ];
@@ -161,6 +162,15 @@ function ContractsIcon(p) {
       <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
       <path d="M14 3v5h5" />
       <path d="M9 13h6M9 17h4" />
+    </svg>
+  );
+}
+function EnrollmentIcon(p) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M22 10L12 5 2 10l10 5 10-5z" />
+      <path d="M6 12v5c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-5" />
+      <path d="M12 15v4" />
     </svg>
   );
 }

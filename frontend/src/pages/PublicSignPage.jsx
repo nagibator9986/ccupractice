@@ -25,6 +25,11 @@ export default function PublicSignPage() {
     try {
       const res = await signingApi.publicView(token);
       setData(res);
+      // Mark the link as viewed via an explicit POST (the GET is read-only).
+      // Fire-and-forget: a failure here must not block showing the contract.
+      if (res?.request?.status === "pending") {
+        signingApi.publicMarkViewed(token).catch(() => {});
+      }
     } catch (e) {
       const status = e.response?.status;
       const code = e.response?.data?.code;

@@ -1,7 +1,19 @@
+import base64
+import hashlib
 from datetime import datetime
 from ..utils.time import utc_now
 import bcrypt
 from ..extensions import db
+
+# Marks a hash whose password was SHA-256-prehashed before bcrypt. bcrypt
+# silently truncates input at 72 bytes, so multibyte (Cyrillic) passphrases lose
+# entropy; pre-hashing to a fixed 44-byte, NUL-free token avoids that. Legacy
+# rows (no prefix) keep verifying via the raw-password path for back-compat.
+_SHA256_PREFIX = "$sha256$"
+
+
+def _prehash(password: str) -> bytes:
+    return base64.b64encode(hashlib.sha256(password.encode("utf-8")).digest())
 
 
 class User(db.Model):
@@ -16,15 +28,18 @@ class User(db.Model):
     created_at = db.Column(db.DateTime, default=utc_now)
 
     def set_password(self, password: str) -> None:
-        self.password_hash = bcrypt.hashpw(
-            password.encode("utf-8"), bcrypt.gensalt()
-        ).decode("utf-8")
+        hashed = bcrypt.hashpw(_prehash(password), bcrypt.gensalt()).decode("utf-8")
+        self.password_hash = _SHA256_PREFIX + hashed
 
     def check_password(self, password: str) -> bool:
         try:
-            return bcrypt.checkpw(
-                password.encode("utf-8"), self.password_hash.encode("utf-8")
-            )
+            stored = self.password_hash or ""
+            if stored.startswith(_SHA256_PREFIX):
+                return bcrypt.checkpw(
+                    _prehash(password), stored[len(_SHA256_PREFIX):].encode("utf-8")
+                )
+            # Legacy hash (raw password) — verify with the old path.
+            return bcrypt.checkpw(password.encode("utf-8"), stored.encode("utf-8"))
         except Exception:
             return False
 

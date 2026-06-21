@@ -15,9 +15,28 @@ export default class ErrorBoundary extends Component {
     console.error("UI crash captured by ErrorBoundary:", error, info);
   }
 
+  // "На главную": drop the cached user (a poisoned ccu_user is the most common
+  // persisted-state crash source) but keep the token so AuthContext refetches a
+  // fresh /me on reload. The full-page navigation discards the broken tree.
   reset = () => {
-    this.setState({ error: null });
+    try {
+      localStorage.removeItem("ccu_user");
+    } catch {
+      /* ignore */
+    }
     window.location.assign("/");
+  };
+
+  // Escape hatch for a crash that reproduces on "/" (e.g. a poisoned token):
+  // clear both creds and go to /login, whose render path doesn't depend on them.
+  hardReset = () => {
+    try {
+      localStorage.removeItem("ccu_user");
+      localStorage.removeItem("ccu_token");
+    } catch {
+      /* ignore */
+    }
+    window.location.assign("/login");
   };
 
   render() {
@@ -38,6 +57,9 @@ export default class ErrorBoundary extends Component {
           </details>
           <button className="btn-primary w-full" onClick={this.reset}>
             На главную
+          </button>
+          <button className="btn-secondary w-full mt-2" onClick={this.hardReset}>
+            Выйти и очистить сессию
           </button>
         </div>
       </div>
