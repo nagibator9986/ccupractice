@@ -5,6 +5,7 @@ from .contract import Contract, ContractStatus
 from .settings import CollegeSettings, ContractCounter
 from .signature import Signature
 from .signing_request import SigningRequest
+from .specialty import Specialty
 from .enrollment import (
     EnrollmentContract,
     EnrollmentStatus,
@@ -31,6 +32,7 @@ __all__ = [
     "ContractCounter",
     "Signature",
     "SigningRequest",
+    "Specialty",
     "EnrollmentContract",
     "EnrollmentStatus",
     "EnrollmentSigningRequest",

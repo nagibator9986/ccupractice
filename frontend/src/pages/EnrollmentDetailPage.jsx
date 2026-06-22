@@ -3,7 +3,8 @@ import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import PageHeader from "../components/PageHeader.jsx";
 import { TextField, SelectField, TextArea } from "../components/Field.jsx";
-import { enrollmentsApi } from "../api/endpoints.js";
+import SpecialtyPicker from "../components/SpecialtyPicker.jsx";
+import { enrollmentsApi, specialtiesApi } from "../api/endpoints.js";
 import { formatDate, formatDateTime, ruYears } from "../utils/format.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { StatusPill, whoSigns } from "./EnrollmentsPage.jsx";
@@ -39,10 +40,18 @@ export default function EnrollmentDetailPage() {
   const [item, setItem] = useState(null);
   const [form, setForm] = useState(null);
   const [requests, setRequests] = useState([]);
+  const [specialties, setSpecialties] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  useEffect(() => {
+    specialtiesApi
+      .list({ active: 1 })
+      .then((d) => setSpecialties(d.items))
+      .catch(() => {/* picker just falls back to free-text */});
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -243,6 +252,17 @@ export default function EnrollmentDetailPage() {
 
           <Section title="Программа и оплата">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <SpecialtyPicker
+                span={3}
+                disabled={!isAdmin}
+                specialties={specialties}
+                specialty={form.specialty}
+                code={form.specialty_code}
+                qualification={form.qualification}
+                onPick={(name, code, qualification) =>
+                  setForm((f) => ({ ...f, specialty: name, specialty_code: code, qualification }))
+                }
+              />
               <TextField label="Специальность" value={form.specialty} onChange={(v) => set("specialty", v)} disabled={!isAdmin} />
               <TextField label="Код специальности" value={form.specialty_code} onChange={(v) => set("specialty_code", v)} disabled={!isAdmin} />
               <TextField label="Квалификация" value={form.qualification} onChange={(v) => set("qualification", v)} disabled={!isAdmin} />

@@ -9,6 +9,7 @@ import ContractDetailPage from "./pages/ContractDetailPage.jsx";
 import EnrollmentsPage from "./pages/EnrollmentsPage.jsx";
 import EnrollmentDetailPage from "./pages/EnrollmentDetailPage.jsx";
 import ArchivePage from "./pages/ArchivePage.jsx";
+import DataPage from "./pages/DataPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import PublicSignPage from "./pages/PublicSignPage.jsx";
 import EnrollmentSignPage from "./pages/EnrollmentSignPage.jsx";
@@ -49,6 +50,7 @@ export default function App() {
         <Route path="enrollments" element={<EnrollmentsPage />} />
         <Route path="enrollments/:id" element={<EnrollmentDetailPage />} />
         <Route path="archive" element={<ArchivePage />} />
+        <Route path="data" element={<DataPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

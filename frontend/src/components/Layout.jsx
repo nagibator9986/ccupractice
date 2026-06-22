@@ -10,6 +10,7 @@ const NAV = [
   { to: "/contracts", label: "Договоры практики", icon: ContractsIcon },
   { to: "/enrollments", label: "Договоры со студентами", icon: EnrollmentIcon },
   { to: "/archive", label: "Электронный архив", icon: ArchiveIcon },
+  { to: "/data", label: "Данные", icon: DataIcon, adminOnly: true },
   { to: "/settings", label: "Настройки", icon: SettingsIcon, adminOnly: true },
 ];
 
@@ -180,6 +181,15 @@ function ArchiveIcon(p) {
       <rect x="3" y="4" width="18" height="4" rx="1" />
       <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
       <path d="M10 13h4" />
+    </svg>
+  );
+}
+function DataIcon(p) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <ellipse cx="12" cy="5" rx="8" ry="3" />
+      <path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5" />
+      <path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
     </svg>
   );
 }

@@ -4,7 +4,8 @@ import toast from "react-hot-toast";
 import PageHeader from "../components/PageHeader.jsx";
 import Modal from "../components/Modal.jsx";
 import { TextField, SelectField } from "../components/Field.jsx";
-import { enrollmentsApi } from "../api/endpoints.js";
+import SpecialtyPicker from "../components/SpecialtyPicker.jsx";
+import { enrollmentsApi, specialtiesApi } from "../api/endpoints.js";
 import { formatDate, ruYears } from "../utils/format.js";
 import { useAuth } from "../context/AuthContext.jsx";
 
@@ -64,6 +65,14 @@ export default function EnrollmentsPage() {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [creating, setCreating] = useState(null);
+  const [specialties, setSpecialties] = useState([]);
+
+  useEffect(() => {
+    specialtiesApi
+      .list({ active: 1 })
+      .then((d) => setSpecialties(d.items))
+      .catch(() => {/* picker just falls back to free-text */});
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -247,6 +256,16 @@ export default function EnrollmentsPage() {
             <div>
               <div className="text-[11px] uppercase tracking-wide font-semibold text-charcoal-400 mb-2">Программа и оплата</div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <SpecialtyPicker
+                  span={3}
+                  specialties={specialties}
+                  specialty={creating.specialty}
+                  code={creating.specialty_code}
+                  qualification={creating.qualification}
+                  onPick={(name, code, qualification) =>
+                    setCreating({ ...creating, specialty: name, specialty_code: code, qualification })
+                  }
+                />
                 <TextField label="Специальность" value={creating.specialty} onChange={(v) => setCreating({ ...creating, specialty: v })} />
                 <TextField label="Код специальности" value={creating.specialty_code} onChange={(v) => setCreating({ ...creating, specialty_code: v })} />
                 <TextField label="Квалификация" value={creating.qualification} onChange={(v) => setCreating({ ...creating, qualification: v })} />

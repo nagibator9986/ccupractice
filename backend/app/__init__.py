@@ -176,6 +176,7 @@ def create_app() -> Flask:
     from .api.signatures import bp as signatures_bp
     from .api.signing import bp as signing_bp
     from .api.enrollment import bp as enrollment_bp
+    from .api.specialties import bp as specialties_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(partners_bp, url_prefix="/api/partners")
@@ -186,6 +187,7 @@ def create_app() -> Flask:
     app.register_blueprint(signatures_bp, url_prefix="/api/signatures")
     app.register_blueprint(signing_bp, url_prefix="/api/signing")
     app.register_blueprint(enrollment_bp, url_prefix="/api/enrollments")
+    app.register_blueprint(specialties_bp, url_prefix="/api/specialties")
 
     @app.get("/api/health")
     def health():
