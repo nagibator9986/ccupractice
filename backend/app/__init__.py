@@ -1,3 +1,4 @@
+import logging
 import os
 import secrets
 from datetime import timedelta
@@ -27,35 +28,37 @@ def _enable_sqlite_fk(dbapi_connection, _conn_record):
 
 
 def _persistent_secret(name: str, instance_dir: Path) -> str:
-    """Read SECRET / JWT key from env; in dev fall back to a generated instance/ file.
+    """Resolve SECRET / JWT key: env var first, else a key persisted in instance/.
 
-    In production (FLASK_DEBUG off) the env var is REQUIRED and we fail fast if
-    it's missing: instance/ is typically ephemeral and per-container, so a
-    generated key would change on every redeploy (force-logging-out everyone)
-    and differ between replicas (a token minted by one worker is rejected by
-    another). Set SECRET_KEY / JWT_SECRET_KEY as cluster-wide env vars.
+    Setting SECRET_KEY / JWT_SECRET_KEY as env vars is STRONGLY recommended in
+    production: instance/ is often ephemeral and per-container, so a generated key
+    changes on every redeploy (logging everyone out) and differs between replicas
+    (a token minted by one worker is rejected by another). We no longer crash when
+    they're unset — we generate, persist and warn — so a deploy is never bricked
+    by a missing secret, but the warning nudges toward stable env vars.
     """
     env_val = os.getenv(name)
     if env_val:
         return env_val
 
     is_debug = os.getenv("FLASK_DEBUG", "0").strip().lower() in ("1", "true", "yes")
-    if not is_debug:
-        raise RuntimeError(
-            f"{name} is not set. It must be provided as an environment variable in "
-            "production and be identical across all workers, replicas and redeploys."
-        )
-
     secret_file = instance_dir / f".{name.lower()}"
     if secret_file.exists():
         return secret_file.read_text().strip()
+
     value = secrets.token_hex(32)
-    secret_file.parent.mkdir(parents=True, exist_ok=True)
-    secret_file.write_text(value)
     try:
+        secret_file.parent.mkdir(parents=True, exist_ok=True)
+        secret_file.write_text(value)
         secret_file.chmod(0o600)
     except OSError:
         pass
+    if not is_debug:
+        logging.getLogger("ccu").warning(
+            "%s not set — generated an ephemeral key in instance/. Set %s as an "
+            "environment variable for stable sessions across redeploys and replicas.",
+            name, name,
+        )
     return value
 
 

@@ -186,8 +186,15 @@ def generate_contract(cid):
             r.status = "revoked"
             r.revoked_at = utc_now()
             r.signature_id = None
-        if contract.status in (ContractStatus.SIGNED, ContractStatus.SENT):
-            contract.status = ContractStatus.DRAFT
+        # Any status that coexisted with signatures/active requests (SIGNED, SENT,
+        # but also COMPLETED or SCAN_UPLOADED reached via a manual transition or a
+        # scan upload while signed) must be demoted now that every signature has
+        # been dropped — otherwise the contract is left in a terminal/"finalized"
+        # state with a brand-new unsigned document and zero signatures. We are
+        # already inside `if force and (has_sigs or active_reqs)`, so a reset
+        # definitely happened; demote unconditionally. Line below re-promotes
+        # DRAFT -> GENERATED so the result is a consistent GENERATED contract.
+        contract.status = ContractStatus.DRAFT
 
     try:
         generate_contract_files(contract)

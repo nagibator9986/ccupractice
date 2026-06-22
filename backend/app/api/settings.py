@@ -2,6 +2,7 @@ import zipfile
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import jwt_required
 from pathlib import Path
+from sqlalchemy.exc import IntegrityError
 
 from ..extensions import db
 from ..models import CollegeSettings
@@ -19,24 +20,33 @@ _FIELD_LIMITS = {
 }
 
 
+def _get_or_create_settings() -> CollegeSettings:
+    """Return the singleton CollegeSettings, creating it with the fixed id=1 if
+    absent. Uses the same singleton PK as the bootstrap so a concurrent first
+    request collides on the primary key instead of inserting a duplicate row."""
+    s = CollegeSettings.query.first()
+    if s:
+        return s
+    s = CollegeSettings(id=1)
+    db.session.add(s)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        s = CollegeSettings.query.first()
+    return s
+
+
 @bp.get("/college")
 @jwt_required()
 def get_settings():
-    s = CollegeSettings.query.first()
-    if not s:
-        s = CollegeSettings()
-        db.session.add(s)
-        db.session.commit()
-    return jsonify(item=s.to_dict())
+    return jsonify(item=_get_or_create_settings().to_dict())
 
 
 @bp.put("/college")
 @admin_required
 def update_settings():
-    s = CollegeSettings.query.first()
-    if not s:
-        s = CollegeSettings()
-        db.session.add(s)
+    s = _get_or_create_settings()
     data = get_json_safe()
     for field, max_len in _FIELD_LIMITS.items():
         if field in data:

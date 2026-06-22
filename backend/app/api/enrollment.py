@@ -351,15 +351,16 @@ def invite(eid):
         ).first()
         if active and not force:
             continue
+        # Already fully signed → never mint a new link (applies to BOTH paths).
+        # A fresh request would be dead on arrival: every assigned document hits
+        # the `existing` signature guard in public_submit and returns 409. Re-
+        # issuing here would also only invalidate a valid ЭЦП. To truly re-sign,
+        # regenerate the bytes via /generate (force) first.
+        required = set(matrix[party])
+        signed_docs = {s.document for s in (e.signatures or []) if s.signer_party == party}
+        if required.issubset(signed_docs):
+            continue
         if force:
-            # Compute this party's signed documents BEFORE any deletion.
-            required = set(matrix[party])
-            signed_docs = {s.document for s in (e.signatures or []) if s.signer_party == party}
-            if required.issubset(signed_docs):
-                # Already fully signed — re-issuing here would only invalidate a
-                # valid ЭЦП and brick the link. Reset via /generate (force) to
-                # truly regenerate the bytes and re-sign.
-                continue
             # Revoke prior links AND drop this party's partial signatures so the
             # fresh link is not dead on arrival (public_view/submit recompute
             # signed-state from EnrollmentSignature, so leftover rows would make

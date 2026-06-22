@@ -66,7 +66,8 @@ COPY --from=frontend-build /build/dist /app/frontend/dist
 RUN mkdir -p /app/backend/instance /app/backend/uploads /app/backend/archive
 
 ENV FRONTEND_DIST=/app/frontend/dist \
-    PYTHONPATH=/app/backend
+    PYTHONPATH=/app/backend \
+    FLASK_APP=run:app
 
 WORKDIR /app/backend
 
@@ -75,6 +76,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:${PORT:-8000}/healthz || exit 1
 
-# Gunicorn: 2 workers × 4 threads is plenty for an internal college tool.
-# Use `sh -c` so $PORT (Railway-provided) is expanded at runtime.
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-8000} --workers ${WEB_CONCURRENCY:-2} --threads ${WEB_THREADS:-4} --timeout 180 --access-logfile - --error-logfile - run:app"]
+# Apply DB migrations ONCE here (single process) before starting the workers, so
+# the per-worker boot-time upgrade is a no-op and gunicorn workers never race on
+# concurrent Alembic upgrades. Then start gunicorn (2 workers × 4 threads).
+# `sh -c` so $PORT (Railway-provided) is expanded at runtime.
+CMD ["sh", "-c", "flask db upgrade && gunicorn --bind 0.0.0.0:${PORT:-8000} --workers ${WEB_CONCURRENCY:-2} --threads ${WEB_THREADS:-4} --timeout 180 --access-logfile - --error-logfile - run:app"]

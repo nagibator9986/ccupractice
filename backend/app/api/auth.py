@@ -34,8 +34,8 @@ def login():
 @jwt_required()
 def me():
     user = db.session.get(User, int(get_jwt_identity()))
-    if not user:
-        return jsonify(error="Пользователь не найден"), 404
+    if not user or not user.is_active:
+        return jsonify(error="Учётная запись недоступна", code="account_inactive"), 401
     return jsonify(user=user.to_dict())
 
 
@@ -48,7 +48,9 @@ def change_password():
     if len(new) < 6:
         return jsonify(error="Пароль должен быть не короче 6 символов"), 400
     user = db.session.get(User, int(get_jwt_identity()))
-    if not user or not user.check_password(current):
+    if not user or not user.is_active:
+        return jsonify(error="Учётная запись недоступна", code="account_inactive"), 401
+    if not user.check_password(current):
         return jsonify(error="Неверный текущий пароль"), 400
     user.set_password(new)
     db.session.commit()

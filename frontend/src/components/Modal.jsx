@@ -6,17 +6,33 @@ const FOCUSABLE =
 export default function Modal({ open, onClose, title, children, footer, size = "lg" }) {
   const cardRef = useRef(null);
   const prevFocus = useRef(null);
+  // Keep the latest onClose in a ref so the focus effect can depend ONLY on
+  // `open`. Depending on `onClose` (callers pass an inline arrow that is a new
+  // reference every render) re-ran the whole effect on every keystroke and the
+  // focus-into-dialog call below stole focus back out of the input the user was
+  // typing in — the caret jumped after a single character.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
     prevFocus.current = document.activeElement;
 
     const card = cardRef.current;
-    (card?.querySelector(FOCUSABLE) || card)?.focus();
+    // Move focus INTO the dialog once, on open. Prefer the first real form
+    // control (input/select/textarea) so the user can start typing immediately
+    // — focusing the header ✕ button instead felt jarring. Falls back to any
+    // focusable element, then the card itself. This runs only when `open`
+    // flips (the effect depends on [open] alone), so it can never steal focus
+    // back mid-typing.
+    const firstField = card?.querySelector(
+      "input:not([disabled]), select:not([disabled]), textarea:not([disabled])",
+    );
+    (firstField || card?.querySelector(FOCUSABLE) || card)?.focus();
 
     const handler = (e) => {
       if (e.key === "Escape") {
-        onClose?.();
+        onCloseRef.current?.();
         return;
       }
       // Trap Tab inside the dialog so focus can't escape to the inert page
@@ -51,7 +67,7 @@ export default function Modal({ open, onClose, title, children, footer, size = "
       // Restore focus to whatever opened the modal.
       prevFocus.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!open) return null;
   const widths = { sm: "max-w-md", md: "max-w-xl", lg: "max-w-3xl", xl: "max-w-5xl" };

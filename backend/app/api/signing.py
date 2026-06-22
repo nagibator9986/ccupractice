@@ -238,15 +238,33 @@ def public_view(token: str):
     # scanners and browser prefetch can't silently corrupt the audit timeline,
     # and the handler stays safe/idempotent (and not CSRF-triggerable via <img>).
 
-    all_requests = SigningRequest.query.filter_by(contract_id=contract.id).all()
-    summary = {
-        r.signer_role: {
+    # Build a DETERMINISTIC per-role summary. After a revoke->re-invite or a
+    # `force` re-invite there are legitimately several SigningRequest rows for
+    # one role (an old `revoked` row plus a fresh live one), so a plain
+    # dict-comprehension keyed by role would let whichever row the DB happened
+    # to return last win — on Postgres a SELECT without ORDER BY has no defined
+    # order, so the stale `revoked` row could clobber the live `signed`/`pending`
+    # row and the signer would see the wrong status (e.g. an already-signed
+    # party shown the "Подписать ЭЦП" button). Order oldest->newest and prefer
+    # the live row: a `revoked` row only sets a role if no other row for that
+    # role has been seen yet, so any non-revoked row always wins.
+    all_requests = (
+        SigningRequest.query.filter_by(contract_id=contract.id)
+        .order_by(SigningRequest.created_at.asc(), SigningRequest.id.asc())
+        .all()
+    )
+    summary: dict = {}
+    for r in all_requests:
+        existing = summary.get(r.signer_role)
+        # Keep the first non-revoked row we encounter for a role; never let a
+        # later/revoked row overwrite an already-chosen live row.
+        if existing is not None and existing["status"] != "revoked":
+            continue
+        summary[r.signer_role] = {
             "status": r.status,
             "signed_at": r.signed_at.isoformat() if r.signed_at else None,
             "recipient_name": r.recipient_name,
         }
-        for r in all_requests
-    }
 
     return jsonify(
         request={
