@@ -18,7 +18,7 @@ const EDITABLE = [
   "parent_full_name", "parent_relation", "parent_iin", "parent_id_doc_number", "parent_id_doc_issued_by",
   "parent_address", "parent_phone", "parent_email",
   "specialty", "specialty_code", "qualification", "education_base", "study_form", "course",
-  "tuition_year_amount", "notes",
+  "tuition_year_amount", "include_lms", "notes",
 ];
 
 function Section({ title, children, extra }) {
@@ -180,7 +180,9 @@ export default function EnrollmentDetailPage() {
   if (!item || !form) return <div className="text-charcoal-500">Загрузка…</div>;
 
   const matrix = item.required_matrix || {};
-  const docKeys = ["contract", "consent"];
+  // Derive from the server's relevant-documents map so the LMS contract appears
+  // only when it's enabled for this enrollment.
+  const docKeys = Object.keys(item.documents || { contract: 1, consent: 1 });
 
   return (
     <div>
@@ -212,6 +214,17 @@ export default function EnrollmentDetailPage() {
               <TextField label="Дата договора" type="date" value={form.contract_date} onChange={(v) => set("contract_date", v)} disabled={!isAdmin} />
               <SelectField label="База образования" value={form.education_base} onChange={(v) => set("education_base", v)} options={[{ value: "9", label: "После 9 класса" }, { value: "11", label: "После 11 класса" }]} disabled={!isAdmin} />
             </div>
+            <label className="flex items-center gap-2 mt-3 text-sm text-charcoal-700 cursor-pointer">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-charcoal-300 text-coral-600 focus:ring-coral-500"
+                checked={!!form.include_lms}
+                disabled={!isAdmin}
+                onChange={(e) => set("include_lms", e.target.checked)}
+              />
+              Включить «Договор о подключении к Caspian Digital»
+              <span className="text-[11px] text-charcoal-400">— после изменения нажмите «Сформировать документы»</span>
+            </label>
           </Section>
 
           <Section title="Абитуриент (обучающийся)">

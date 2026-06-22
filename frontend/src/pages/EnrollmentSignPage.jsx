@@ -12,6 +12,7 @@ export default function EnrollmentSignPage() {
   const [error, setError] = useState(null);
   const [ncaAvailable, setNcaAvailable] = useState(null);
   const [signing, setSigning] = useState(null); // document key currently signing
+  const [previewKey, setPreviewKey] = useState(null); // document key shown inline
 
   async function load() {
     try {
@@ -118,7 +119,10 @@ export default function EnrollmentSignPage() {
               {documents.map((doc) => (
                 <div key={doc.key} className="rounded-xl border border-charcoal-100 p-4">
                   <div className="flex items-center justify-between gap-3">
-                    <div className="font-medium text-charcoal-800">{doc.label}</div>
+                    <div>
+                      <div className="font-medium text-charcoal-800">{doc.label}</div>
+                      <div className="text-[11px] text-charcoal-400 mt-0.5">Документ на двух языках — қазақша / на русском</div>
+                    </div>
                     {doc.signed ? (
                       <span className="badge bg-emerald-100 text-emerald-700">✓ Подписано</span>
                     ) : (
@@ -126,6 +130,14 @@ export default function EnrollmentSignPage() {
                     )}
                   </div>
                   <div className="flex flex-wrap gap-2 mt-3">
+                    {doc.pdf && (
+                      <button
+                        className="btn-secondary text-xs"
+                        onClick={() => setPreviewKey(previewKey === doc.key ? null : doc.key)}
+                      >
+                        {previewKey === doc.key ? "▲ Свернуть" : "👁 Просмотреть"}
+                      </button>
+                    )}
                     {doc.pdf && (
                       <a className="btn-secondary text-xs" href={enrollmentsApi.publicDownloadUrl(token, doc.key, "pdf")} target="_blank" rel="noreferrer">📕 PDF</a>
                     )}
@@ -142,6 +154,20 @@ export default function EnrollmentSignPage() {
                       </button>
                     )}
                   </div>
+                  {previewKey === doc.key && doc.pdf && (
+                    <div className="mt-3 rounded-lg overflow-hidden ring-1 ring-charcoal-100 bg-charcoal-50">
+                      <iframe
+                        title={`Просмотр: ${doc.label}`}
+                        src={enrollmentsApi.publicPreviewUrl(token, doc.key)}
+                        className="w-full h-[70vh] bg-white"
+                      />
+                    </div>
+                  )}
+                  {!doc.pdf && doc.docx && (
+                    <div className="mt-2 text-[11px] text-charcoal-400">
+                      Предпросмотр недоступен — откройте DOCX, чтобы увидеть обе языковые версии.
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

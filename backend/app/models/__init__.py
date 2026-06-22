@@ -18,6 +18,7 @@ from .enrollment import (
     PARTY_LABELS,
     DOC_CONTRACT,
     DOC_CONSENT,
+    DOC_LMS,
     PARTY_STUDENT,
     PARTY_PARENT,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "PARTY_LABELS",
     "DOC_CONTRACT",
     "DOC_CONSENT",
+    "DOC_LMS",
     "PARTY_STUDENT",
     "PARTY_PARENT",
 ]

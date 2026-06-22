@@ -97,6 +97,9 @@ def _apply(e: EnrollmentContract, data: dict) -> None:
             setattr(e, field, parse_int(data.get(field)))
     if "notes" in data:
         e.notes = clean_str(data.get("notes"))
+    if "include_lms" in data:
+        val = data.get("include_lms")
+        e.include_lms = val if isinstance(val, bool) else str(val).strip().lower() in ("1", "true", "yes", "on")
     # Keep the year in sync with the (manual) contract date.
     if e.contract_date:
         e.year = e.contract_date.year
@@ -296,6 +299,7 @@ def delete_enrollment(eid):
     archive_base = Path(current_app.config["ARCHIVE_FOLDER"])
     files = [archive_base / rel for rel in (
         e.contract_docx_path, e.contract_pdf_path, e.consent_docx_path, e.consent_pdf_path,
+        e.lms_docx_path, e.lms_pdf_path,
     ) if rel]
 
     db.session.delete(e)
@@ -674,4 +678,9 @@ def public_download(token, document, fmt):
     rel = e.doc_path(document, fmt)
     if not rel:
         return jsonify(error="Файл не найден"), 404
-    return send_from_directory(current_app.config["ARCHIVE_FOLDER"], rel, as_attachment=True)
+    # `?inline=1` serves the file for in-browser preview (the signer sees the full
+    # bilingual document before signing) instead of forcing a download.
+    inline = request.args.get("inline") in ("1", "true", "yes")
+    return send_from_directory(
+        current_app.config["ARCHIVE_FOLDER"], rel, as_attachment=not inline
+    )

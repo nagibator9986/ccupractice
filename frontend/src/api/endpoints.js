@@ -152,6 +152,10 @@ export const enrollmentsApi = {
     client.post(`/enrollments/public/${token}/submit/${document}`, { cms }).then((r) => r.data),
   publicDownloadUrl: (token, document, fmt) =>
     `${API_PREFIX}/enrollments/public/${token}/download/${document}/${fmt}`,
+  // Inline (in-browser) PDF preview so the signer sees the full bilingual
+  // document — both the Kazakh and Russian columns — before signing.
+  publicPreviewUrl: (token, document) =>
+    `${API_PREFIX}/enrollments/public/${token}/download/${document}/pdf?inline=1`,
 };
 
 export const specialtiesApi = {

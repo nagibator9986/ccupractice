@@ -53,6 +53,7 @@ const emptyDraft = (number, today) => ({
   qualification: "",
   education_base: "9",
   tuition_year_amount: "",
+  include_lms: false,
   parent_full_name: "",
   parent_phone: "",
   parent_email: "",
@@ -272,6 +273,15 @@ export default function EnrollmentsPage() {
                 <SelectField label="База образования" value={creating.education_base} onChange={(v) => setCreating({ ...creating, education_base: v })} options={[{ value: "9", label: "После 9 класса" }, { value: "11", label: "После 11 класса" }]} placeholder="—" />
                 <TextField label="Стоимость за год (тг)" type="number" value={creating.tuition_year_amount} onChange={(v) => setCreating({ ...creating, tuition_year_amount: v })} />
               </div>
+              <label className="flex items-center gap-2 mt-3 text-sm text-charcoal-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-charcoal-300 text-coral-600 focus:ring-coral-500"
+                  checked={!!creating.include_lms}
+                  onChange={(e) => setCreating({ ...creating, include_lms: e.target.checked })}
+                />
+                Также сформировать «Договор о подключении к Caspian Digital» (подписывается вместе с основным договором)
+              </label>
             </div>
 
             <div>

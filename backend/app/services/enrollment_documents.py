@@ -7,14 +7,17 @@ from pathlib import Path
 from docxtpl import DocxTemplate
 from flask import current_app
 
-from ..models import CollegeSettings, EnrollmentContract, DOC_CONTRACT, DOC_CONSENT, ADULT_SIGN_AGE
+from ..models import (
+    CollegeSettings,
+    EnrollmentContract,
+    DOC_CONTRACT,
+    DOC_CONSENT,
+    DOC_LMS,
+    ADULT_SIGN_AGE,
+)
 from ..utils.files import safe_filename, ensure_dir
 from .document_generator import _convert_to_pdf, _MONTHS_RU
-from .enrollment_template_builder import (
-    ensure_enrollment_templates,
-    CONTRACT_FILENAME,
-    CONSENT_FILENAME,
-)
+from .enrollment_template_builder import ensure_enrollment_templates
 
 
 def _fmt_date(value: date | None) -> str:
@@ -54,6 +57,12 @@ def _build_context(e: EnrollmentContract) -> dict:
         "id_doc_issued_by": e.applicant_id_doc_issued_by or "",
         "id_doc_issued_date": _fmt_date(e.applicant_id_doc_issued_date),
         "address": ", ".join(p for p in addr_parts if p) or "",
+        # Separate address parts feed the bilingual contract's split address line
+        # (город / район / улица / дом); the joined `address` feeds the consent.
+        "addr_city": e.applicant_address_city or "",
+        "addr_district": e.applicant_address_district or "",
+        "addr_street": e.applicant_address_street or "",
+        "addr_house": e.applicant_address_house or "",
         "home_phone": e.applicant_home_phone or "",
         "phone": e.applicant_phone or "",
         "email": e.applicant_email or "",
@@ -100,10 +109,17 @@ def _archive_dir(e: EnrollmentContract) -> Path:
     return ensure_dir(base)
 
 
+_STEMS = {
+    DOC_CONTRACT: "Договор_ОУ",
+    DOC_CONSENT: "Согласие_ПДн",
+    DOC_LMS: "Договор_Caspian_Digital",
+}
+
+
 def _filename(e: EnrollmentContract, document: str, ext: str) -> str:
     who = safe_filename(e.applicant_full_name or f"enroll_{e.id}")
     year = e.year or (e.contract_date or date.today()).year
-    stem = "Договор_ОУ" if document == DOC_CONTRACT else "Согласие_ПДн"
+    stem = _STEMS.get(document, document)
     return f"{stem}_{who}_{year}.{ext}"
 
 
@@ -184,8 +200,24 @@ def generate_enrollment_files(e: EnrollmentContract) -> EnrollmentContract:
     try:
         _render_one(e, DOC_CONTRACT, templates["contract"], context, archive_dir, written)
         _render_one(e, DOC_CONSENT, templates["consent"], context, archive_dir, written)
+        if e.include_lms:
+            _render_one(e, DOC_LMS, templates["lms"], context, archive_dir, written)
+        else:
+            # Opted out (or toggled off after a prior generation): drop any stale
+            # LMS files + DB paths so the document set stays consistent.
+            _clear_document(e, DOC_LMS)
     except Exception:
         for path in written:
             _unlink_quietly(path, "partially-generated enrollment file")
         raise
     return e
+
+
+def _clear_document(e: EnrollmentContract, document: str) -> None:
+    """Remove a document's generated files + DB paths (used when LMS is off)."""
+    archive_root = current_app.config["ARCHIVE_FOLDER"]
+    for fmt in ("docx", "pdf"):
+        rel = e.doc_path(document, fmt)
+        if rel:
+            _unlink_quietly(Path(archive_root) / rel, f"disabled {document} file")
+        setattr(e, f"{document}_{fmt}_path", None)

@@ -24,10 +24,12 @@ from ..utils.time import utc_now
 # Document keys used across signatures, signing requests and downloads.
 DOC_CONTRACT = "contract"
 DOC_CONSENT = "consent"
-DOCUMENTS = (DOC_CONTRACT, DOC_CONSENT)
+DOC_LMS = "lms"  # «Договор о подключении к Caspian Digital» — optional add-on
+DOCUMENTS = (DOC_CONTRACT, DOC_CONSENT, DOC_LMS)
 DOCUMENT_LABELS = {
     DOC_CONTRACT: "Договор на оказание образовательных услуг",
     DOC_CONSENT: "Согласие на обработку персональных данных",
+    DOC_LMS: "Договор о подключении к цифровой экосистеме Caspian Digital",
 }
 
 # Signing parties.
@@ -54,19 +56,29 @@ def _full_years(born: date | None, on: date | None) -> int | None:
     return on.year - born.year - ((on.month, on.day) < (born.month, born.day))
 
 
-def signing_matrix(age: int | None) -> dict[str, list[str]]:
+def signing_matrix(age: int | None, include_lms: bool = False) -> dict[str, list[str]]:
     """Return {party: [documents]} the party must sign, given the applicant age.
 
     Returns ``{}`` when age is unknown — the caller must require a birth date
     before inviting signers (otherwise the legally-correct signer is ambiguous).
+
+    The optional LMS (Caspian Digital) contract is signed by the SAME party that
+    signs the main contract — the applicant if adult, the legal representative if
+    a minor — so it is appended to that party's list only when ``include_lms``.
     """
     if age is None:
         return {}
     if age >= ADULT_SIGN_AGE:
-        # Applicant signs both; parent co-signs the consent.
-        return {PARTY_STUDENT: [DOC_CONTRACT, DOC_CONSENT], PARTY_PARENT: [DOC_CONSENT]}
+        # Applicant signs the contract (+LMS) and consent; parent co-signs consent.
+        student_docs = [DOC_CONTRACT, DOC_CONSENT]
+        if include_lms:
+            student_docs.append(DOC_LMS)
+        return {PARTY_STUDENT: student_docs, PARTY_PARENT: [DOC_CONSENT]}
     # Minor: the legal representative signs everything.
-    return {PARTY_PARENT: [DOC_CONTRACT, DOC_CONSENT]}
+    parent_docs = [DOC_CONTRACT, DOC_CONSENT]
+    if include_lms:
+        parent_docs.append(DOC_LMS)
+    return {PARTY_PARENT: parent_docs}
 
 
 class EnrollmentStatus:
@@ -134,11 +146,16 @@ class EnrollmentContract(db.Model):
     # ── Finance ──────────────────────────────────────────────────────────────
     tuition_year_amount = db.Column(db.Integer)  # тенге за учебный год
 
+    # Optional: also issue the «Договор о подключении к Caspian Digital» (LMS).
+    include_lms = db.Column(db.Boolean, default=False, nullable=False)
+
     # ── Generated files (relative to ARCHIVE_FOLDER) ─────────────────────────
     contract_docx_path = db.Column(db.String(500))
     contract_pdf_path = db.Column(db.String(500))
     consent_docx_path = db.Column(db.String(500))
     consent_pdf_path = db.Column(db.String(500))
+    lms_docx_path = db.Column(db.String(500))
+    lms_pdf_path = db.Column(db.String(500))
 
     status = db.Column(db.String(30), default=EnrollmentStatus.DRAFT, nullable=False, index=True)
     notes = db.Column(db.Text)
@@ -161,7 +178,14 @@ class EnrollmentContract(db.Model):
 
     @property
     def required_matrix(self) -> dict[str, list[str]]:
-        return signing_matrix(self.applicant_age)
+        return signing_matrix(self.applicant_age, self.include_lms)
+
+    @property
+    def relevant_documents(self) -> tuple[str, ...]:
+        """Documents this enrollment actually issues (LMS only when opted in)."""
+        if self.include_lms:
+            return (DOC_CONTRACT, DOC_CONSENT, DOC_LMS)
+        return (DOC_CONTRACT, DOC_CONSENT)
 
     def doc_path(self, document: str, fmt: str) -> str | None:
         return getattr(self, f"{document}_{fmt}_path", None)
@@ -218,6 +242,7 @@ class EnrollmentContract(db.Model):
             "study_form": self.study_form,
             "course": self.course,
             "tuition_year_amount": self.tuition_year_amount,
+            "include_lms": self.include_lms,
             "status": self.status,
             "status_label": EnrollmentStatus.LABELS.get(self.status, self.status),
             "notes": self.notes,
@@ -229,7 +254,7 @@ class EnrollmentContract(db.Model):
                     "docx": bool(self.doc_path(doc, "docx")),
                     "pdf": bool(self.doc_path(doc, "pdf")),
                 }
-                for doc in DOCUMENTS
+                for doc in self.relevant_documents
             },
             "signatures_count": len(self.signatures or []),
             "is_fully_signed": self.is_fully_signed,

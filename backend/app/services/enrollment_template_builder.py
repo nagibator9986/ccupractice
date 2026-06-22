@@ -1,30 +1,198 @@
-"""Build docxtpl-ready templates for the enrollment documents:
+"""Build docxtpl-ready templates for the enrollment documents.
 
-  * contract_enrollment_template.docx  — «Договор на оказание образовательных услуг»
-  * consent_template.docx              — «Согласие на обработку персональных данных»
+The College's official contracts are **bilingual two-column tables** (Kazakh in
+the left column, Russian in the right) with a fixed legal layout and section
+order. Earlier this module hand-rebuilt a Russian-only, single-column draft —
+which is exactly why the platform rendered the documents in a "chaotic order"
+that didn't match the originals. We now instead take the **real source .docx**
+(shipped under ``templates_docx/source/``) and inject docxtpl/Jinja tags *only*
+into the blank fill-in fields, leaving every byte of the official bilingual
+layout, wording and signature placement untouched.
 
-Legal text mirrors the College's source files (Russian). The College side of the
-contract is filled from CollegeSettings; the applicant / parent / program /
-payment / number / date are docxtpl variables. The College can later replace
-these defaults with their exact bilingual file via the template-upload endpoint.
+Produced templates (rendered later by :mod:`enrollment_documents`):
+  * contract_enrollment_template_v3.docx — «Договор на оказание образовательных
+    услуг» (bilingual KZ/RU)
+  * contract_lms_template_v1.docx        — «Договор о подключении к цифровой
+    экосистеме Caspian College (Caspian Digital)» (bilingual KZ/RU)
+  * consent_template_v2.docx             — «Согласие на сбор и обработку
+    персональных данных» (Russian, age-aware — matches the RU-only original)
+
+The injected variables (``{{ student.full_name }}`` …) are filled from the
+EnrollmentContract / CollegeSettings in :func:`enrollment_documents._build_context`.
 """
+import re
 from pathlib import Path
 
 from docx import Document
 from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-# v2: age-aware (minor vs adult) wording. Bumped so ensure_enrollment_templates
-# regenerates instead of serving a cached pre-age-aware file.
-CONTRACT_FILENAME = "contract_enrollment_template_v2.docx"
+# Bump the filename to force regeneration when the injection logic changes
+# (ensure_enrollment_templates only builds a file that doesn't already exist).
+CONTRACT_FILENAME = "contract_enrollment_template_v3.docx"
+LMS_FILENAME = "contract_lms_template_v1.docx"
 CONSENT_FILENAME = "consent_template_v2.docx"
 
+SOURCE_DIRNAME = "source"
+SOURCE_CONTRACT = "source_contract_edu.docx"
+SOURCE_LMS = "source_contract_lms.docx"
 
-def _ctrl(doc, tag: str):
-    """Paragraph-level docxtpl control tag (e.g. '{%p if ... %}'). docxtpl removes
-    the whole paragraph on render, so the {% %} is never split across runs."""
-    doc.add_paragraph(tag)
+# A "blank" fill-in field: a run of 3+ underscores. Jinja tags carry no
+# underscores, so a filled field is never re-matched.
+_BLANK = re.compile(r"_{3,}")
 
+
+def _fill_paragraph(paragraph, tags_by_occ: dict[int, str]) -> int:
+    """Replace selected blank fields inside one paragraph with Jinja tags.
+
+    ``tags_by_occ`` maps the 1-based blank index (counted left-to-right across
+    ALL runs of the paragraph) to the replacement text. Blanks whose index is
+    absent are left as-is (e.g. a signature line we want to keep blank).
+
+    Replacement happens *inside the run that holds the blank*, so the run-level
+    character formatting of the rest of the paragraph (bold quoted terms, etc.)
+    is fully preserved — and the inserted tag lands in a single run, so docxtpl
+    never sees a Jinja tag split across runs.
+    """
+    occ = 0
+    replaced = 0
+    for run in paragraph.runs:
+        text = run.text
+        if not _BLANK.search(text):
+            continue
+        out, last = [], 0
+        for m in _BLANK.finditer(text):
+            occ += 1
+            out.append(text[last:m.start()])
+            if occ in tags_by_occ:
+                out.append(tags_by_occ[occ])
+                replaced += 1
+            else:
+                out.append(text[m.start():m.end()])
+            last = m.end()
+        out.append(text[last:])
+        run.text = "".join(out)
+    return replaced
+
+
+def _apply_fills(doc: Document, fills: list[tuple]) -> int:
+    """Apply a fill map to the first table of ``doc``.
+
+    Each fill is ``(row, col, paragraph_index, {occ: tag})``. Returns the number
+    of fields actually replaced so the builder can assert nothing silently
+    drifted out of place after an edit to the source document.
+    """
+    table = doc.tables[0]
+    total = 0
+    for row, col, para_idx, tags in fills:
+        cell = table.rows[row].cells[col]
+        paragraph = cell.paragraphs[para_idx]
+        total += _fill_paragraph(paragraph, tags)
+    return total
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fill maps — (row, col, paragraph_index, {blank_occurrence: jinja_tag})
+# Coordinates are verified against the source .docx; _build_from_source() asserts
+# the expected number of replacements so a source change can't silently misalign.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_NUM = "{{ contract.number }}"
+_NAME = "{{ student.full_name }}"
+_IIN = "{{ student.iin }}"
+_SPEC = "{{ student.specialty }}"
+_QUAL = "{{ student.qualification }}"
+_AMOUNT = " {{ contract.tuition_amount }} "
+_CITY = "{{ student.addr_city }}"
+_DISTRICT = "{{ student.addr_district }}"
+_STREET = " {{ student.addr_street }}"
+_HOUSE = "{{ student.addr_house }}"
+_DOCNO = "{{ student.id_doc_number }}"
+_DOCBY = "{{ student.id_doc_issued_by }}"
+_DOCDATE = "{{ student.id_doc_issued_date }}"
+_HOMEPHONE = "{{ student.home_phone }}"
+_PHONE = "{{ student.phone }}"
+_PNAME = "{{ parent.full_name }}"
+_PADDR = "{{ parent.address }}"
+_PPHONE = "{{ parent.phone }}"
+_PEMAIL = "{{ parent.email }}"
+
+
+# Common bottom block: «СТУДЕНТ» requisites + «СОГЛАСИЕ РОДИТЕЛЕЙ». Row offsets
+# differ between the two contracts, so each contract passes its own absolute map.
+EDU_FILLS = [
+    (0, 0, 0, {1: _NUM}), (0, 1, 0, {1: _NUM}),                 # № договора (KZ/RU header)
+    (2, 0, 0, {1: _NAME}), (2, 1, 0, {1: _NAME}),               # ФИО студента (преамбула)
+    (4, 0, 0, {1: _SPEC}), (4, 1, 0, {1: _SPEC}),               # специальность (предмет)
+    (12, 0, 0, {1: _NAME}), (12, 1, 0, {1: _NAME}),             # ФИО (обязанности колледжа)
+    (12, 0, 7, {1: _QUAL}), (12, 1, 7, {1: _QUAL}),             # квалификация
+    (16, 0, 0, {1: _AMOUNT}), (16, 1, 0, {1: _AMOUNT}),         # стоимость за год
+    (27, 1, 1, {1: _NAME}),                                     # ФИО студента (реквизиты)
+    (28, 1, 0, {1: _IIN}),                                      # ИИН
+    (29, 1, 1, {1: _CITY}), (29, 1, 2, {1: _DISTRICT}),         # адрес: город / район
+    (29, 1, 3, {1: _STREET, 2: _HOUSE}),                        # улица / дом
+    (30, 1, 1, {1: _DOCNO}), (30, 1, 2, {1: _DOCBY}),           # удостоверение: №, кем выдано
+    (30, 1, 3, {1: _DOCDATE}),                                  # дата выдачи
+    (30, 1, 4, {1: _HOMEPHONE}), (30, 1, 5, {1: _PHONE}),       # тел. дом / сот
+    (32, 1, 2, {2: _NAME}),                                     # подпись: оставить линию, ФИО справа
+    (34, 0, 0, {1: _PNAME}), (34, 0, 3, {1: _PADDR}),           # родитель: ФИО, адрес (KZ)
+    (34, 0, 5, {1: _PPHONE}), (34, 0, 7, {1: _PEMAIL}),         # родитель: тел, email (KZ)
+    (34, 1, 0, {1: _PNAME}), (34, 1, 2, {1: _PADDR}),           # родитель: ФИО, адрес (RU)
+    (34, 1, 4, {1: _PPHONE}), (34, 1, 6, {1: _PEMAIL}),         # родитель: тел, email (RU)
+]
+
+LMS_FILLS = [
+    (0, 0, 0, {1: _NUM}), (0, 1, 0, {1: _NUM}),                 # № договора (KZ/RU header)
+    (2, 0, 0, {1: _NAME}), (2, 1, 0, {1: _NAME}),               # ФИО студента (преамбула)
+    (26, 1, 1, {1: _NAME}),                                     # ФИО студента (реквизиты)
+    (27, 1, 0, {1: _IIN}),                                      # ИИН
+    (28, 1, 1, {1: _CITY}), (28, 1, 2, {1: _DISTRICT}),         # адрес: город / район
+    (28, 1, 3, {1: _STREET, 2: _HOUSE}),                        # улица / дом
+    (29, 1, 1, {1: _DOCNO}), (29, 1, 2, {1: _DOCBY}),           # удостоверение: №, кем выдано
+    (29, 1, 3, {1: _DOCDATE}),                                  # дата выдачи
+    (29, 1, 4, {1: _HOMEPHONE}), (29, 1, 5, {1: _PHONE}),       # тел. дом / сот
+    (31, 1, 2, {2: _NAME}),                                     # подпись: оставить линию, ФИО справа
+    (33, 0, 0, {1: _PNAME}), (33, 0, 3, {1: _PADDR}),           # родитель: ФИО, адрес (KZ)
+    (33, 0, 5, {1: _PPHONE}), (33, 0, 7, {1: _PEMAIL}),         # родитель: тел, email (KZ)
+    (33, 1, 0, {1: _PNAME}), (33, 1, 2, {1: _PADDR}),           # родитель: ФИО, адрес (RU)
+    (33, 1, 4, {1: _PPHONE}), (33, 1, 6, {1: _PEMAIL}),         # родитель: тел, email (RU)
+]
+
+# Expected replacement counts — a guard against a source-file edit silently
+# shifting paragraph indices (the build then raises instead of producing a
+# subtly-broken template).
+_EDU_EXPECTED = sum(len(t) for *_, t in EDU_FILLS)
+_LMS_EXPECTED = sum(len(t) for *_, t in LMS_FILLS)
+
+
+def _build_from_source(source_path: Path, fills: list[tuple], expected: int,
+                       out_path: Path) -> Path:
+    doc = Document(str(source_path))
+    replaced = _apply_fills(doc, fills)
+    if replaced != expected:
+        raise RuntimeError(
+            f"Template injection mismatch for {source_path.name}: "
+            f"replaced {replaced} fields, expected {expected}. "
+            "The source .docx layout changed — re-verify the fill map."
+        )
+    doc.save(str(out_path))
+    return out_path
+
+
+def build_contract_template(out_path: str | Path, source_dir: str | Path) -> Path:
+    source = Path(source_dir) / SOURCE_CONTRACT
+    return _build_from_source(source, EDU_FILLS, _EDU_EXPECTED, Path(out_path))
+
+
+def build_lms_template(out_path: str | Path, source_dir: str | Path) -> Path:
+    source = Path(source_dir) / SOURCE_LMS
+    return _build_from_source(source, LMS_FILLS, _LMS_EXPECTED, Path(out_path))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Personal-data consent (Russian, age-aware) — the original consent is a
+# single-column Russian document, so this one stays single-language by design.
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _doc() -> Document:
     doc = Document()
@@ -37,6 +205,10 @@ def _doc() -> Document:
     style.font.name = "Times New Roman"
     style.font.size = Pt(11)
     return doc
+
+
+def _ctrl(doc, tag: str):
+    doc.add_paragraph(tag)
 
 
 def _h(doc, text, *, size=12, align=WD_ALIGN_PARAGRAPH.CENTER):
@@ -59,215 +231,6 @@ def _p(doc, text, *, bold=False, align=WD_ALIGN_PARAGRAPH.JUSTIFY, size=11):
     return p
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Educational-services contract
-# ─────────────────────────────────────────────────────────────────────────────
-
-def build_contract_template(path: str | Path) -> Path:
-    path = Path(path)
-    doc = _doc()
-
-    _h(doc, "ДОГОВОР № {{ contract.number }}")
-    _h(doc, "на оказание образовательных услуг в Колледже", size=12)
-    _p(
-        doc,
-        "город {{ college.city }}                                             "
-        "«{{ contract.date_day }}» {{ contract.date_month }} {{ contract.date_year }} года",
-        align=WD_ALIGN_PARAGRAPH.LEFT,
-    )
-
-    _p(
-        doc,
-        "Колледж — структурное подразделение Учреждения образования "
-        "«{{ college.name_ru }}», именуемый в дальнейшем «Колледж», лицензия на право "
-        "ведения образовательной деятельности № 0059626 от 30.09.2008 г., в лице "
-        "Директора {{ college.director_full_name }}, действующего на основании "
-        "Доверенности № 15/2025 от 16.10.2025, с одной стороны, и",
-    )
-    _p(
-        doc,
-        "{{ student.full_name }}, ИИН {{ student.iin }}, гражданин(-ка) Республики "
-        "Казахстан, действующий(-ая) от своего имени, именуемый(-ая) в дальнейшем "
-        "«Студент», с другой стороны, далее совместно именуемые «Стороны», заключили "
-        "настоящий Договор на оказание образовательных услуг (далее — «Договор») о нижеследующем.",
-    )
-
-    _h(doc, "1. ПРЕДМЕТ ДОГОВОРА", align=WD_ALIGN_PARAGRAPH.LEFT)
-    _p(
-        doc,
-        "1.1. Колледж принимает на себя обязательства по организации обучения Студента "
-        "по очной форме обучения по специальности {{ student.specialty_code }} "
-        "«{{ student.specialty }}», соответствующей государственным общеобязательным "
-        "стандартам (ГОСО) технического и профессионального образования, и выдаче диплома "
-        "образца, соответствующего законодательству РК, после освоения полного курса "
-        "обучения и достижения положительных результатов итоговой государственной аттестации.",
-    )
-    _p(doc, "1.2. Колледж оказывает Студенту образовательные услуги в соответствии с рабочими учебными планами.")
-    _p(doc, "1.3. Обучение осуществляется в соответствии с законодательством Республики Казахстан.")
-    _p(doc, "1.4. Студент оплачивает предоставляемые Колледжем образовательные услуги в соответствии с условиями настоящего Договора.")
-
-    _h(doc, "2. ПРАВА СТОРОН", align=WD_ALIGN_PARAGRAPH.LEFT)
-    _p(doc, "2.1. Студент имеет право на:", bold=True)
-    for item in [
-        "доступ к пользованию фондом учебной, учебно-методической, научной и другой литературы;",
-        "получение дополнительных услуг сверх ГОСО за дополнительную плату;",
-        "перевод с одной специальности на другую в установленном МП РК порядке, на основании приказа директора Колледжа;",
-        "участие во всех видах и формах научно-исследовательских работ Колледжа;",
-        "получение информации о деятельности Колледжа (Устав, лицензия, порядок приёма и т.д.), за исключением конфиденциальных сведений;",
-        "различные формы материального и морального поощрения за успехи в учёбе и активное участие в деятельности Колледжа;",
-        "восстановление в число обучающихся в каникулярный период в порядке, установленном Колледжем;",
-        "предварительную оплату за весь период обучения, при этом сумма Договора остаётся неизменной до окончания срока обучения.",
-    ]:
-        _p(doc, "— " + item)
-
-    _p(doc, "2.2. Колледж имеет право:", bold=True)
-    for item in [
-        "применять дистанционные технологии обучения при освоении обучающимся образовательных программ;",
-        "требовать от Студента добросовестного и надлежащего исполнения обязанностей в соответствии с Договором и внутренними нормативными документами Колледжа;",
-        "применять к Студенту меры дисциплинарного воздействия (вплоть до отчисления) за нарушение учебной дисциплины и условий настоящего Договора;",
-        "требовать бережного отношения к имуществу Колледжа и возмещения причинённого материального ущерба в порядке, предусмотренном законодательством РК;",
-        "расторгать настоящий Договор в одностороннем порядке при нарушении Студентом любого из взятых на себя обязательств;",
-        "требовать от Студента своевременной оплаты за обучение.",
-    ]:
-        _p(doc, "— " + item)
-
-    _h(doc, "3. ОБЯЗАННОСТИ СТОРОН", align=WD_ALIGN_PARAGRAPH.LEFT)
-    _p(doc, "3.1. Колледж обязуется:", bold=True)
-    for item in [
-        "принять {{ student.full_name }} в установленном МП РК порядке в число обучающихся Колледжа при условии внесения первого платежа не менее 25% от суммы годовой стоимости обучения;",
-        "ознакомить Студента с лицензией, Этическим кодексом Студента, Правилами внутреннего распорядка и нормативно-правовыми актами, регламентирующими порядок приёма и организацию учебно-воспитательного процесса;",
-        "обеспечить подготовку специалиста в соответствии с требованиями ГОСО РК;",
-        "определить объём учебной нагрузки и режим занятий Студента, создать здоровые и безопасные условия обучения;",
-        "после окончания полной программы обучения и при положительных результатах итоговой аттестации присвоить Студенту квалификацию «{{ student.qualification }}» и выдать диплом образца, соответствующего законодательству РК;",
-        "предоставить академический отпуск в случаях, предусмотренных законодательством, и восстановить Студента по его заявлению в установленном порядке.",
-    ]:
-        _p(doc, "— " + item)
-
-    _p(doc, "3.2. Студент обязуется:", bold=True)
-    for item in [
-        "освоить профессиональную программу технического и профессионального образования в полном объёме согласно учебному плану и в установленные сроки пройти все виды контроля знаний;",
-        "не нарушать учебную дисциплину, соблюдать Правила внутреннего распорядка, Этический кодекс Студента и условия настоящего Договора;",
-        "бережно относиться к имуществу, оборудованию и библиотечному фонду Колледжа; в случае причинения ущерба возместить его в полном объёме;",
-        "посещать все виды учебных занятий; при пропуске по уважительной причине предоставлять оправдательные документы;",
-        "своевременно оплачивать обучение в соответствии с условиями настоящего Договора;",
-        "при изменении места жительства, телефона сообщать об этом в Колледж в трёхдневный срок.",
-    ]:
-        _p(doc, "— " + item)
-
-    _h(doc, "4. РАЗМЕР И ПОРЯДОК ОПЛАТЫ ОБРАЗОВАТЕЛЬНЫХ УСЛУГ", align=WD_ALIGN_PARAGRAPH.LEFT)
-    _p(
-        doc,
-        "4.1. Сумма оплаты за предоставляемые образовательные услуги составляет "
-        "{{ contract.tuition_amount }} тенге за учебный год.",
-        bold=True,
-    )
-    _p(
-        doc,
-        "4.2. Стоимость обучения, указанная в п. 4.1, является базовой и может быть изменена "
-        "один раз в год с учётом инфляции в соответствии с официальными данными уполномоченного "
-        "государственного органа путём подписания сторонами дополнительного соглашения. В других "
-        "случаях увеличение стоимости обучения не допускается.",
-    )
-    _p(doc, "4.3. Оплата производится безналичным перечислением на расчётный счёт Колледжа в национальной валюте РК.")
-    _p(
-        doc,
-        "4.4. В случае невыполнения финансовых обязательств в течение одного месяца после "
-        "установленного срока Студент может быть отчислен без предупреждения. Договорные "
-        "обязательства по оплате сохраняются до даты издания приказа об отчислении.",
-    )
-    _p(
-        doc,
-        "4.5. Во всех случаях возврата денежных средств Колледж удерживает 1% от суммы, "
-        "подлежащей возврату, для покрытия организационных затрат.",
-    )
-
-    _h(doc, "5. ОТВЕТСТВЕННОСТЬ СТОРОН", align=WD_ALIGN_PARAGRAPH.LEFT)
-    _p(
-        doc,
-        "5.1. За неисполнение либо ненадлежащее исполнение сторонами своих обязанностей они несут "
-        "ответственность в соответствии с действующим законодательством РК.",
-    )
-    _p(
-        doc,
-        "5.2. В случае невыполнения обязательств по срокам оплаты Студент оплачивает Колледжу пеню "
-        "в размере 0,2% от суммы, подлежащей оплате, за каждый день просрочки, но не более 10% от "
-        "суммы долга. Оплата пени не освобождает от исполнения обязательств по Договору.",
-    )
-
-    _h(doc, "6. СРОК ДЕЙСТВИЯ. ПОРЯДОК ИЗМЕНЕНИЯ И РАСТОРЖЕНИЯ", align=WD_ALIGN_PARAGRAPH.LEFT)
-    _p(
-        doc,
-        "6.1. Настоящий Договор вступает в силу со дня его подписания сторонами и действует на весь "
-        "срок обучения Студента в соответствии с учебным планом Колледжа.",
-    )
-    _p(doc, "6.2. Условия настоящего Договора могут быть изменены или дополнены по письменному соглашению сторон.")
-    _p(doc, "6.3. Во всём остальном, что не урегулировано Договором, стороны руководствуются нормами действующего законодательства РК.")
-
-    _h(doc, "7. ПРОЧИЕ УСЛОВИЯ", align=WD_ALIGN_PARAGRAPH.LEFT)
-    _p(
-        doc,
-        "7.1. Все споры, возникающие из настоящего Договора, стороны стремятся урегулировать путём "
-        "переговоров; при недостижении соглашения спор рассматривается в судебном порядке по месту "
-        "нахождения Колледжа в соответствии с законодательством РК.",
-    )
-    _p(
-        doc,
-        "7.2. Настоящий Договор составлен в двух экземплярах на государственном и русском языках, "
-        "имеющих одинаковую юридическую силу, по одному для каждой стороны.",
-    )
-    _p(
-        doc,
-        "7.3. Студент подтверждает, что ознакомлен с условиями настоящего Договора, Правилами "
-        "внутреннего распорядка Колледжа и Этическим кодексом Студента и обязуется их соблюдать.",
-    )
-
-    _h(doc, "8. ЮРИДИЧЕСКИЕ АДРЕСА, РЕКВИЗИТЫ И ПОДПИСИ СТОРОН", align=WD_ALIGN_PARAGRAPH.LEFT)
-
-    _p(doc, "«КОЛЛЕДЖ»:", bold=True)
-    _p(doc, "Колледж УО «{{ college.name_ru }}»")
-    _p(doc, "Адрес: {{ college.address }}")
-    _p(doc, "БИН {{ college.bin }}")
-    _p(doc, "ИИК {{ college.iik }}, {{ college.bank_name }}, БИК {{ college.bank_bik }}")
-    _p(doc, "Тел.: {{ college.phone }}   e-mail: {{ college.email }}")
-    _p(doc, "Директор ____________________ / {{ college.director_full_name }}    М.П.")
-
-    _p(doc, " ")
-    _p(doc, "«СТУДЕНТ»:", bold=True)
-    _p(doc, "Ф.И.О.: {{ student.full_name }}")
-    _p(doc, "ИИН: {{ student.iin }}    Дата рождения: {{ student.birth_date }}")
-    _p(doc, "Адрес: {{ student.address }}")
-    _p(doc, "Удостоверение личности № {{ student.id_doc_number }}, кем выдано: {{ student.id_doc_issued_by }}, дата выдачи: {{ student.id_doc_issued_date }}")
-    _p(doc, "Дом. тел.: {{ student.home_phone }}    Сот. тел.: {{ student.phone }}")
-    # Who signs the CONTRACT depends on age: >=16 the student signs; <16 the legal
-    # representative signs (the minor does not).
-    _ctrl(doc, "{%p if student.is_minor %}")
-    _p(doc, "За несовершеннолетнего Обучающегося настоящий Договор подписывает законный представитель (ниже).")
-    _ctrl(doc, "{%p else %}")
-    _p(doc, "Подпись ____________________ / {{ student.full_name }}")
-    _ctrl(doc, "{%p endif %}")
-
-    # Parent signs the CONTRACT only for a minor (for >=16 the parent signs the
-    # consent, not the contract).
-    _ctrl(doc, "{%p if student.is_minor %}")
-    _h(doc, "ПОДПИСЬ ЗАКОННОГО ПРЕДСТАВИТЕЛЯ (РОДИТЕЛЯ)", align=WD_ALIGN_PARAGRAPH.LEFT)
-    _p(
-        doc,
-        "Я, {{ parent.full_name }}, проживающий(-ая) по адресу: {{ parent.address }}, "
-        "тел.: {{ parent.phone }}, e-mail: {{ parent.email }}, действуя в интересах "
-        "несовершеннолетнего Обучающегося, заключаю и подписываю настоящий Договор. "
-        "С условиями Договора ознакомлен(-а) и согласен(-на).",
-    )
-    _p(doc, "Подпись ____________________ / {{ parent.full_name }}    Дата ____________")
-    _ctrl(doc, "{%p endif %}")
-
-    doc.save(path)
-    return path
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Personal-data consent
-# ─────────────────────────────────────────────────────────────────────────────
-
 def build_consent_template(path: str | Path) -> Path:
     path = Path(path)
     doc = _doc()
@@ -275,8 +238,6 @@ def build_consent_template(path: str | Path) -> Path:
     _h(doc, "СОГЛАСИЕ")
     _h(doc, "на сбор и обработку персональных данных", size=12)
 
-    # Age-aware opening: a >=16 applicant gives consent personally; a minor acts
-    # with the legal representative's consent.
     _ctrl(doc, "{%p if applicant.is_minor %}")
     _p(
         doc,
@@ -340,8 +301,6 @@ def build_consent_template(path: str | Path) -> Path:
     _ctrl(doc, "{%p else %}")
     _p(doc, "Подпись Обучающегося: ____________________ / {{ applicant.full_name }}")
     _ctrl(doc, "{%p endif %}")
-    # The legal representative co-signs the consent in BOTH cases (parent always
-    # signs the consent per the signing matrix).
     _p(doc, "Согласен(-на): ____________________ / {{ parent.full_name }} (подпись законного представителя)")
     _p(doc, "Дата ____________")
 
@@ -349,13 +308,27 @@ def build_consent_template(path: str | Path) -> Path:
     return path
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+
 def ensure_enrollment_templates(templates_dir: str | Path) -> dict:
+    """Build any missing template into ``templates_dir`` and return their paths.
+
+    Sources live in ``templates_dir/source/``. The bilingual contracts are
+    injected from those sources; the consent is generated programmatically.
+    """
     templates_dir = Path(templates_dir)
     templates_dir.mkdir(parents=True, exist_ok=True)
+    source_dir = templates_dir / SOURCE_DIRNAME
+
     contract = templates_dir / CONTRACT_FILENAME
+    lms = templates_dir / LMS_FILENAME
     consent = templates_dir / CONSENT_FILENAME
+
     if not contract.exists():
-        build_contract_template(contract)
+        build_contract_template(contract, source_dir)
+    if not lms.exists():
+        build_lms_template(lms, source_dir)
     if not consent.exists():
         build_consent_template(consent)
-    return {"contract": contract, "consent": consent}
+
+    return {"contract": contract, "lms": lms, "consent": consent}
