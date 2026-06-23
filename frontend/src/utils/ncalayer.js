@@ -84,13 +84,28 @@ function openSocket(signal) {
   });
 }
 
-// A CMS produced by NCALayer is a long, PEM-less base64 blob (starts with "MII…").
+// Normalise a candidate into a clean, STANDARD-base64 CMS string, or null.
+// NCALayer builds variously return the CMS as PEM-armoured text, base64url
+// (`-`/`_`), or with embedded line breaks — all of which the previous strict
+// `^[A-Za-z0-9+/=]+$` test rejected, surfacing as "NCALayer не вернул
+// CMS-подпись" even though a perfectly good signature was sitting in the
+// response. We strip the armour/whitespace, translate base64url → standard and
+// re-pad, so the backend (which decodes standard base64) accepts it.
+function normalizeCms(s) {
+  if (typeof s !== "string") return null;
+  // Drop PEM armour lines (-----BEGIN …-----/-----END …-----) and all whitespace.
+  let c = s.replace(/-----[^-]*-----/g, "").replace(/\s+/g, "");
+  if (c.length < 100) return null;
+  // Must look like base64 (standard or url-safe), with optional `=` padding.
+  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(c)) return null;
+  // base64url → standard base64.
+  if (/[-_]/.test(c) && !/[+/]/.test(c)) c = c.replace(/-/g, "+").replace(/_/g, "/");
+  while (c.length % 4) c += "=";
+  return c;
+}
+
 function looksLikeCms(s) {
-  return (
-    typeof s === "string" &&
-    s.trim().length > 100 &&
-    /^[A-Za-z0-9+/=\r\n]+$/.test(s.trim())
-  );
+  return normalizeCms(s) !== null;
 }
 
 function extractCms(data) {
@@ -99,14 +114,17 @@ function extractCms(data) {
     data?.responseObject,
     Array.isArray(data?.body?.result) ? data.body.result[0] : data?.body?.result,
     data?.body?.cms,
+    data?.body?.signature,
     data?.result?.cms,
+    data?.result?.signature,
     Array.isArray(data?.result) ? data.result[0] : null,
     typeof data?.body === "string" ? data.body : null,
     typeof data?.result === "string" ? data.result : null,
     typeof data === "string" ? data : null,
   ];
   for (const c of known) {
-    if (looksLikeCms(c)) return c.trim();
+    const cms = normalizeCms(c);
+    if (cms) return cms;
   }
   // 2) Fallback: deep-walk the whole response and return the first CMS-looking
   // string anywhere. Robust against envelope shape changes between versions.
@@ -115,7 +133,8 @@ function extractCms(data) {
   while (stack.length) {
     const cur = stack.pop();
     if (cur == null) continue;
-    if (looksLikeCms(cur)) return cur.trim();
+    const cms = normalizeCms(cur);
+    if (cms) return cms;
     if (typeof cur === "object") {
       if (seen.has(cur)) continue;
       seen.add(cur);
@@ -123,6 +142,18 @@ function extractCms(data) {
     }
   }
   return null;
+}
+
+// Compact preview of the raw NCALayer envelope so a failure is self-diagnosing
+// from a screenshot (the user rarely has the browser console open).
+function envelopePreview(data) {
+  let s;
+  try {
+    s = typeof data === "string" ? data : JSON.stringify(data);
+  } catch {
+    s = String(data);
+  }
+  return s.length > 300 ? s.slice(0, 300) + "…" : s;
 }
 
 function extractError(data) {
@@ -211,7 +242,10 @@ export async function signBase64WithNCALayer(payloadBase64, options = {}) {
       if (isFinal) {
         // eslint-disable-next-line no-console
         console.warn("[NCALayer] final response without extractable CMS:", data);
-        return finish(reject, new Error("NCALayer не вернул CMS-подпись"));
+        return finish(
+          reject,
+          new Error("NCALayer не вернул CMS-подпись. Ответ NCALayer: " + envelopePreview(data)),
+        );
       }
       // eslint-disable-next-line no-console
       console.debug("[NCALayer] intermediate message ignored, waiting for result");

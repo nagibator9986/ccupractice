@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -86,6 +87,29 @@ def _hash(payload_bytes: bytes, algo: str) -> bytes:
 
 def payload_sha256(payload_bytes: bytes) -> str:
     return hashlib.sha256(payload_bytes).hexdigest()
+
+
+_PEM_ARMOR = re.compile(r"-----[^-]*-----")
+
+
+def _normalize_cms_b64(cms_b64: str) -> str:
+    """Accept the CMS in whatever shape NCALayer produced it.
+
+    Different NCALayer builds return the CMS as PEM-armoured text, base64url
+    (``-``/``_``) or with embedded line breaks. Strip the armour/whitespace,
+    translate base64url → standard base64 and re-pad so b64decode accepts it.
+    The frontend already normalises, but this keeps the server robust to any
+    client (and to direct API callers).
+    """
+    s = _PEM_ARMOR.sub("", cms_b64)
+    s = "".join(s.split())  # drop all whitespace
+    if "-" in s or "_" in s:
+        if "+" not in s and "/" not in s:  # looks base64url → translate
+            s = s.replace("-", "+").replace("_", "/")
+    pad = len(s) % 4
+    if pad:
+        s += "=" * (4 - pad)
+    return s
 
 
 # ── Subject parsing ─────────────────────────────────────────────────────────
@@ -258,7 +282,7 @@ def parse_cms_signature(cms_b64: str, payload_bytes: bytes) -> ParsedSignature:
     if not cms_b64:
         raise SignatureError("Подпись пуста")
     try:
-        raw = base64.b64decode(cms_b64, validate=False)
+        raw = base64.b64decode(_normalize_cms_b64(cms_b64), validate=False)
     except Exception as e:
         raise SignatureError("Подпись не является корректным base64") from e
 
