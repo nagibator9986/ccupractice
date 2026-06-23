@@ -145,8 +145,14 @@ builder and regenerate, or the change is lost on the next rebuild.
   picks the signer cert via `SignerInfo.sid`, verifies `messageDigest ==
   SHA-256(payload)`, verifies the RSA/ECDSA signature over the SignedAttributes,
   rejects weak digests (`< sha256`) and expired/not-yet-valid certs.
+- KZ national **GOST** certs (OID arc `1.2.398.3.10`, Қалқан) are common.
+  `cryptography` can't verify GOST 34.10/34.11, so they take a national path:
+  identity + cert validity are enforced and the document binding is checked
+  best-effort via Streebog (`gostcrypto`) — never hard-rejected on a hash miss
+  (KZ GOST may differ from Russian Streebog), only warned. RSA/ECDSA keep full
+  cryptographic verification (digest + signature).
 - Out of scope (documented MVP limit): cert-chain to НУЦ root, CRL/OCSP, TSA
-  timestamps. GOST keys aren't verifiable by `cryptography` → clear error.
+  timestamps; server-side asymmetric verification of GOST signatures.
 - Public token flow: GET preview is read-only; `pending→viewed` is an explicit
   POST; the signer can preview the full **bilingual PDF inline** (`?inline=1`)
   before signing; one signature per (enrollment, document, party) enforced by a

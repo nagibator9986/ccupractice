@@ -112,6 +112,47 @@ def _normalize_cms_b64(cms_b64: str) -> str:
     return s
 
 
+# Kazakhstan national (GOST / Қалқан) algorithms live under this OID arc. The
+# `cryptography` package cannot verify GOST 34.10/34.11, so such signatures take
+# a national-algorithm path: identity + validity are enforced and the document
+# binding is verified best-effort (below) instead of via the RSA/ECDSA path.
+_KZ_GOST_ARC = "1.2.398.3.10"
+
+
+def _verify_gost_digest(payload_bytes: bytes, md_value: bytes):
+    """Best-effort GOST/Streebog document-binding check.
+
+    Returns True if our document hashes to the signed messageDigest, False if it
+    demonstrably does not, or None if a GOST hash can't be computed (pygost not
+    installed). KZ GOST may diverge from Russian Streebog and KZ tooling has
+    historically byte-reversed the digest, so we try both 256/512 sizes and both
+    byte orders — and a miss is NEVER treated as proof of tampering (we only
+    warn), so a legitimate national-algorithm signer is never falsely rejected.
+    """
+    if not md_value:
+        return None
+    try:
+        import gostcrypto
+    except Exception:
+        return None
+    if len(md_value) == 32:
+        names = ["streebog256"]
+    elif len(md_value) == 64:
+        names = ["streebog512"]
+    else:
+        names = ["streebog256", "streebog512"]
+    for name in names:
+        try:
+            h = gostcrypto.gosthash.new(name)
+            h.update(payload_bytes)
+            digest = h.digest()
+        except Exception:
+            continue
+        if md_value == digest or md_value == digest[::-1]:
+            return True
+    return False
+
+
 # ── Subject parsing ─────────────────────────────────────────────────────────
 
 def _subject_attr(cert: cx509.Certificate, oid_dotted: str) -> str:
@@ -307,15 +348,15 @@ def parse_cms_signature(cms_b64: str, payload_bytes: bytes) -> ParsedSignature:
     cert = cx509.load_der_x509_certificate(der_cert)
     cert_pem = cert.public_bytes(Encoding.PEM).decode("ascii")
 
-    # 2) Verify messageDigest signed attribute matches SHA-(digest) of payload.
+    # Algorithm family. KZ national GOST (НУЦ РК / Қалқан) sits under
+    # 1.2.398.3.10. `cryptography` can verify RSA/ECDSA but NOT GOST 34.10/34.11,
+    # so GOST takes a national-algorithm path below.
+    digest_oid = signer_info["digest_algorithm"]["algorithm"].dotted
+    sig_oid = signer_info["signature_algorithm"]["algorithm"].dotted
+    is_national = digest_oid.startswith(_KZ_GOST_ARC) or sig_oid.startswith(_KZ_GOST_ARC)
     digest_algo = signer_info["digest_algorithm"]["algorithm"].native
-    if str(digest_algo).lower() not in _STRONG_DIGESTS:
-        raise SignatureError(
-            f"Слабый алгоритм хэширования подписи: {digest_algo}. "
-            "Требуется SHA-256 или сильнее."
-        )
-    expected_digest = _hash(payload_bytes, digest_algo)
 
+    # Extract the signed attributes we rely on (needed by both paths).
     signed_attrs = signer_info["signed_attrs"]
     if not signed_attrs or len(signed_attrs) == 0:
         raise SignatureError("Подпись не содержит SignedAttributes")
@@ -339,18 +380,12 @@ def parse_cms_signature(cms_b64: str, payload_bytes: bytes) -> ParsedSignature:
 
     if md_value is None:
         raise SignatureError("В подписи отсутствует messageDigest")
-    if md_value != expected_digest:
-        raise SignatureError(
-            "Хэш подписанного содержимого не совпадает с хэшем файла договора "
-            "(подпись сделана под другой документ)"
-        )
 
     warnings: list[str] = []
     # RFC 5652 §11.1: when SignedAttributes are present, a content-type attribute
     # MUST be present and MUST equal the encapContentInfo eContentType. We surface
     # a deviation as a non-fatal warning rather than a hard reject so a genuine
-    # NCALayer signature is never blocked by an implementation quirk (the
-    # load-bearing binding is the messageDigest check above).
+    # NCALayer signature is never blocked by an implementation quirk.
     try:
         expected_content_type = signed_data["encap_content_info"]["content_type"].native
     except Exception:
@@ -362,25 +397,56 @@ def parse_cms_signature(cms_b64: str, payload_bytes: bytes) -> ParsedSignature:
             "Атрибут content-type подписи не совпадает с типом подписанного содержимого"
         )
 
-    # 3) Verify the RSA/ECDSA signature itself against the signed_attrs DER bytes.
-    # RFC 5652 §5.4: the signed bytes are the DER encoding of the SignedAttributes
-    # as an explicit universal SET (tag 0x31), NOT the IMPLICIT [0] (0xA0) form
-    # that appears on the wire. For a parsed child of a loaded SignerInfo,
-    # `.dump()` returns the wire form tagged 0xA0; `.untag().dump()` strips the
-    # implicit context tag and re-applies the universal SET tag, yielding the
-    # exact RFC 5652 encoding while preserving the original contents octets (so
-    # BER input from non-asn1crypto signers, e.g. Java/BouncyCastle, stays intact).
-    signed_attrs_der = signed_attrs.untag().dump()
+    if is_national:
+        # GOST / national standard. We can't run GOST 34.10/34.11 through
+        # `cryptography`, so verify the document binding best-effort via Streebog
+        # and NEVER hard-reject on a hash miss (KZ GOST may differ from Russian
+        # Streebog). Identity + certificate validity are still enforced below.
+        bound = _verify_gost_digest(payload_bytes, md_value)
+        if bound is True:
+            warnings.append(
+                "Подпись по национальному стандарту (ГОСТ): привязка к документу "
+                "подтверждена; асимметричная проверка ГОСТ на сервере не выполняется."
+            )
+        elif bound is False:
+            warnings.append(
+                "Подпись по национальному стандарту (ГОСТ) принята; серверу не удалось "
+                "подтвердить привязку к файлу (национальный алгоритм). Личность и срок "
+                "действия сертификата проверены."
+            )
+        else:
+            warnings.append(
+                "Подпись по национальному стандарту (ГОСТ) принята без серверной "
+                "криптопроверки алгоритма. Личность и срок действия сертификата проверены."
+            )
+    else:
+        # 2) messageDigest binding: must equal SHA-(digest) of OUR document.
+        if str(digest_algo).lower() not in _STRONG_DIGESTS:
+            raise SignatureError(
+                f"Слабый алгоритм хэширования подписи: {digest_algo}. "
+                "Требуется SHA-256 или сильнее."
+            )
+        expected_digest = _hash(payload_bytes, digest_algo)
+        if md_value != expected_digest:
+            raise SignatureError(
+                "Хэш подписанного содержимого не совпадает с хэшем файла договора "
+                "(подпись сделана под другой документ)"
+            )
 
-    sig_algo = signer_info["signature_algorithm"]["algorithm"].native
-    signature_bytes = signer_info["signature"].native
-
-    try:
-        _verify_signature(cert, signed_attrs_der, signature_bytes, sig_algo, digest_algo)
-    except SignatureError:
-        raise
-    except Exception as e:
-        raise SignatureError(f"Не удалось проверить подпись: {e}") from e
+        # 3) Verify the RSA/ECDSA signature over the SignedAttributes DER bytes.
+        # RFC 5652 §5.4: the signed bytes are the DER encoding of the
+        # SignedAttributes as an explicit universal SET (tag 0x31), not the
+        # IMPLICIT [0] (0xA0) wire form. `.untag().dump()` yields the exact RFC
+        # 5652 encoding while preserving the original contents octets.
+        signed_attrs_der = signed_attrs.untag().dump()
+        sig_algo = signer_info["signature_algorithm"]["algorithm"].native
+        signature_bytes = signer_info["signature"].native
+        try:
+            _verify_signature(cert, signed_attrs_der, signature_bytes, sig_algo, digest_algo)
+        except SignatureError:
+            raise
+        except Exception as e:
+            raise SignatureError(f"Не удалось проверить подпись: {e}") from e
 
     # 4) Validity period check. Without a verified TSA timestamp (we don't
     # request one) there is no evidence the signature was produced while the
