@@ -4,6 +4,7 @@ import toast from "react-hot-toast";
 import PageHeader from "../components/PageHeader.jsx";
 import { TextField, SelectField, TextArea } from "../components/Field.jsx";
 import SpecialtyPicker from "../components/SpecialtyPicker.jsx";
+import VerificationBadge from "../components/VerificationBadge.jsx";
 import { enrollmentsApi, specialtiesApi } from "../api/endpoints.js";
 import { formatDate, formatDateTime, ruYears } from "../utils/format.js";
 import { useAuth } from "../context/AuthContext.jsx";
@@ -379,7 +380,10 @@ export default function EnrollmentDetailPage() {
               <ul className="space-y-2 text-sm">
                 {item.signatures.map((s) => (
                   <li key={s.id} className="rounded-lg bg-charcoal-50 p-2.5">
-                    <div className="font-medium">{s.document_label}</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-medium">{s.document_label}</div>
+                      <VerificationBadge level={s.verification_level} className="text-[10px]" />
+                    </div>
                     <div className="text-xs text-charcoal-600">
                       {s.signer_party_label}: {s.signer_full_name || "—"} (ИИН {s.signer_iin_or_bin || "—"})
                     </div>

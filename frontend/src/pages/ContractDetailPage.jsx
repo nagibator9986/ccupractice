@@ -4,6 +4,7 @@ import toast from "react-hot-toast";
 import PageHeader from "../components/PageHeader.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import Modal from "../components/Modal.jsx";
+import VerificationBadge from "../components/VerificationBadge.jsx";
 import { contractsApi, signingApi } from "../api/endpoints.js";
 import { formatDate, formatDateTime, STATUS_LABELS } from "../utils/format.js";
 import { signBase64WithNCALayer, pingNCALayer } from "../utils/ncalayer.js";
@@ -419,6 +420,7 @@ export default function ContractDetailPage() {
                     </div>
                     {sig && (
                       <div className="text-xs text-charcoal-600 mt-2 space-y-1">
+                        <div className="mb-1"><VerificationBadge level={sig.verification_level} className="text-[10px]" /></div>
                         <div>👤 {sig.signer_full_name || "—"}</div>
                         <div>🆔 {sig.signer_iin_or_bin || "—"}</div>
                         <div>🔢 Серийный: {sig.signer_serial}</div>

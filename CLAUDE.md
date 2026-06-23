@@ -151,6 +151,11 @@ builder and regenerate, or the change is lost on the next rebuild.
   best-effort via Streebog (`gostcrypto`) — never hard-rejected on a hash miss
   (KZ GOST may differ from Russian Streebog), only warned. RSA/ECDSA keep full
   cryptographic verification (digest + signature).
+- Every signature records a **`verification_level`** (`full` | `document_bound` |
+  `accepted`) shown to the admin via `VerificationBadge`, so the real assurance
+  per signature is auditable. This field is the clean seam to later report a
+  stronger level from an external verifier (NCANode / KalkanCrypt SDK, which is
+  the production-grade path for full GOST + chain + OCSP/CRL).
 - Out of scope (documented MVP limit): cert-chain to НУЦ root, CRL/OCSP, TSA
   timestamps; server-side asymmetric verification of GOST signatures.
 - Public token flow: GET preview is read-only; `pending→viewed` is an explicit

@@ -412,6 +412,7 @@ def public_submit(token: str):
         signer_certificate_pem=parsed.certificate_pem,
         cms_signature=cms_b64,
         signed_payload_sha256=parsed.payload_sha256,
+        verification_level=parsed.verification_level,
     )
     db.session.add(sig)
     try:

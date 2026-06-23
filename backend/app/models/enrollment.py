@@ -364,6 +364,8 @@ class EnrollmentSignature(db.Model):
 
     cms_signature = db.Column(db.Text, nullable=False)
     signed_payload_sha256 = db.Column(db.String(80), nullable=False)
+    # How strongly the server verified this signature: full | document_bound | accepted
+    verification_level = db.Column(db.String(20), default="full")
 
     created_at = db.Column(db.DateTime, default=utc_now)
 
@@ -379,5 +381,6 @@ class EnrollmentSignature(db.Model):
             "signer_iin_or_bin": self.signer_iin_or_bin,
             "signer_serial": self.signer_serial,
             "signed_payload_sha256": self.signed_payload_sha256,
+            "verification_level": self.verification_level or "full",
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

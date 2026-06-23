@@ -42,6 +42,21 @@ class SignatureError(ValueError):
     """Raised for any structural or cryptographic problem with the CMS."""
 
 
+# Verification levels, strongest → weakest. Recorded per signature so the
+# document binding's strength is auditable and visible to the admin (and so an
+# external verifier like NCANode can later report a stronger level through the
+# same field without touching callers).
+VERIFY_FULL = "full"              # RSA/ECDSA: digest binding + signature verified
+VERIFY_BOUND = "document_bound"   # GOST: document binding confirmed (Streebog), asym not verified
+VERIFY_ACCEPTED = "accepted"      # GOST: accepted on identity+validity; binding unconfirmed
+
+VERIFY_LABELS = {
+    VERIFY_FULL: "Проверено полностью",
+    VERIFY_BOUND: "ГОСТ: привязка к документу подтверждена",
+    VERIFY_ACCEPTED: "ГОСТ: принято (без серверной криптопроверки)",
+}
+
+
 @dataclass
 class ParsedSignature:
     signer_full_name: str
@@ -52,6 +67,7 @@ class ParsedSignature:
     not_valid_before: Optional[datetime]
     not_valid_after: Optional[datetime]
     warnings: list[str]
+    verification_level: str = VERIFY_FULL
 
 
 # ── Hashing helpers ─────────────────────────────────────────────────────────
@@ -399,27 +415,33 @@ def parse_cms_signature(cms_b64: str, payload_bytes: bytes) -> ParsedSignature:
 
     if is_national:
         # GOST / national standard. We can't run GOST 34.10/34.11 through
-        # `cryptography`, so verify the document binding best-effort via Streebog
-        # and NEVER hard-reject on a hash miss (KZ GOST may differ from Russian
-        # Streebog). Identity + certificate validity are still enforced below.
+        # `cryptography`, so the document binding via Streebog is our integrity
+        # anchor — and we NEVER hard-reject on a hash miss (KZ GOST may differ
+        # from Russian Streebog). Identity + certificate validity are still
+        # enforced below. The verification_level records exactly how strong this
+        # particular check was, so it's auditable and shown to the admin.
         bound = _verify_gost_digest(payload_bytes, md_value)
         if bound is True:
+            verification_level = VERIFY_BOUND
             warnings.append(
                 "Подпись по национальному стандарту (ГОСТ): привязка к документу "
                 "подтверждена; асимметричная проверка ГОСТ на сервере не выполняется."
             )
         elif bound is False:
+            verification_level = VERIFY_ACCEPTED
             warnings.append(
                 "Подпись по национальному стандарту (ГОСТ) принята; серверу не удалось "
                 "подтвердить привязку к файлу (национальный алгоритм). Личность и срок "
                 "действия сертификата проверены."
             )
         else:
+            verification_level = VERIFY_ACCEPTED
             warnings.append(
                 "Подпись по национальному стандарту (ГОСТ) принята без серверной "
                 "криптопроверки алгоритма. Личность и срок действия сертификата проверены."
             )
     else:
+        verification_level = VERIFY_FULL
         # 2) messageDigest binding: must equal SHA-(digest) of OUR document.
         if str(digest_algo).lower() not in _STRONG_DIGESTS:
             raise SignatureError(
@@ -477,4 +499,5 @@ def parse_cms_signature(cms_b64: str, payload_bytes: bytes) -> ParsedSignature:
         not_valid_before=not_before,
         not_valid_after=not_after,
         warnings=warnings,
+        verification_level=verification_level,
     )
