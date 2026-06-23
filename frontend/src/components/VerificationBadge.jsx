@@ -2,6 +2,12 @@
 // real assurance level per signature (RSA/ECDSA are fully verified; KZ GOST is
 // accepted with identity + validity and a best-effort document binding).
 const LEVELS = {
+  legal: {
+    label: "Проверено НУЦ РК",
+    cls: "bg-emerald-100 text-emerald-700",
+    icon: "✅",
+    title: "Полная юридическая проверка через НУЦ РК (NCANode): подпись, цепочка сертификата до корня НУЦ и статус отзыва (OCSP/CRL).",
+  },
   full: {
     label: "Проверено полностью",
     cls: "bg-emerald-100 text-emerald-700",

@@ -32,7 +32,8 @@ from ..models import (
     signing_matrix,
 )
 from ..services.enrollment_documents import generate_enrollment_files
-from ..services.signature_service import SignatureError, parse_cms_signature, payload_sha256
+from ..services.signature_service import SignatureError, payload_sha256
+from ..services.signature_verification import verify_cms_signature
 from ..utils.auth import admin_required
 from ..utils.serializers import clean_str, get_json_safe, parse_date, parse_int
 from ..utils.time import utc_now, utc_today
@@ -593,7 +594,7 @@ def public_submit(token, document):
     payload_bytes = path.read_bytes()
 
     try:
-        parsed = parse_cms_signature(cms_b64, payload_bytes)
+        parsed = verify_cms_signature(cms_b64, payload_bytes)
     except SignatureError as exc:
         return jsonify(error=str(exc)), 400
 

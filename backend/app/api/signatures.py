@@ -7,11 +7,8 @@ from sqlalchemy.exc import IntegrityError
 
 from ..extensions import db
 from ..models import Contract, ContractStatus, Signature
-from ..services.signature_service import (
-    SignatureError,
-    parse_cms_signature,
-    payload_sha256,
-)
+from ..services.signature_service import SignatureError, payload_sha256
+from ..services.signature_verification import verify_cms_signature
 from ..utils.auth import admin_required
 from ..utils.serializers import get_json_safe
 
@@ -68,7 +65,7 @@ def attach_signature(cid):
         return jsonify(error="Файл договора отсутствует на сервере"), 500
     payload_bytes = payload_path.read_bytes()
     try:
-        parsed = parse_cms_signature(cms_b64, payload_bytes)
+        parsed = verify_cms_signature(cms_b64, payload_bytes)
     except SignatureError as exc:
         return jsonify(error=str(exc)), 400
 

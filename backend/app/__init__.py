@@ -116,6 +116,15 @@ def create_app() -> Flask:
         MAX_CONTENT_LENGTH=int(os.getenv("MAX_CONTENT_LENGTH", 33_554_432)),
         JWT_ACCESS_TOKEN_EXPIRES=timedelta(hours=int(os.getenv("JWT_TTL_HOURS", "12"))),
         FRONTEND_DIST=str(frontend_dist),
+        # Legal-grade ЭЦП verification via NCANode (official KalkanCrypt SDK):
+        # set NCANODE_URL to the running service to verify GOST signatures, the
+        # certificate chain to the НУЦ root and revocation (OCSP/CRL). Unset =
+        # in-process verification only. NCANODE_STRICT rejects (instead of
+        # falling back) when NCANode is configured but unreachable.
+        NCANODE_URL=os.getenv("NCANODE_URL", ""),
+        NCANODE_STRICT=os.getenv("NCANODE_STRICT", "0"),
+        NCANODE_VERIFY_OCSP=os.getenv("NCANODE_VERIFY_OCSP", "1"),
+        NCANODE_VERIFY_CRL=os.getenv("NCANODE_VERIFY_CRL", "0"),
     )
 
     Path(app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)

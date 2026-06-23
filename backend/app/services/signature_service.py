@@ -46,11 +46,13 @@ class SignatureError(ValueError):
 # document binding's strength is auditable and visible to the admin (and so an
 # external verifier like NCANode can later report a stronger level through the
 # same field without touching callers).
-VERIFY_FULL = "full"              # RSA/ECDSA: digest binding + signature verified
-VERIFY_BOUND = "document_bound"   # GOST: document binding confirmed (Streebog), asym not verified
+VERIFY_LEGAL = "legal"            # Verified by NCANode / KalkanCrypt: signature + chain to НУЦ + OCSP/CRL
+VERIFY_FULL = "full"              # RSA/ECDSA: digest binding + signature verified in-process
+VERIFY_BOUND = "document_bound"   # GOST: document binding confirmed, asym not verified in-process
 VERIFY_ACCEPTED = "accepted"      # GOST: accepted on identity+validity; binding unconfirmed
 
 VERIFY_LABELS = {
+    VERIFY_LEGAL: "Проверено НУЦ РК (цепочка + отзыв)",
     VERIFY_FULL: "Проверено полностью",
     VERIFY_BOUND: "ГОСТ: привязка к документу подтверждена",
     VERIFY_ACCEPTED: "ГОСТ: принято (без серверной криптопроверки)",
@@ -415,12 +417,28 @@ def parse_cms_signature(cms_b64: str, payload_bytes: bytes) -> ParsedSignature:
 
     if is_national:
         # GOST / national standard. We can't run GOST 34.10/34.11 through
-        # `cryptography`, so the document binding via Streebog is our integrity
-        # anchor — and we NEVER hard-reject on a hash miss (KZ GOST may differ
-        # from Russian Streebog). Identity + certificate validity are still
-        # enforced below. The verification_level records exactly how strong this
-        # particular check was, so it's auditable and shown to the admin.
-        bound = _verify_gost_digest(payload_bytes, md_value)
+        # `cryptography`, so we bind the signature to OUR document WITHOUT needing
+        # the GOST hash: NCALayer signs with the document attached (encapsulate),
+        # so the CMS's eContent IS the signed bytes — comparing it to our file is
+        # an algorithm-agnostic, exact binding. We fall back to a best-effort
+        # Streebog digest match, and NEVER hard-reject on a miss (KZ GOST may
+        # differ from Russian Streebog). Identity + cert validity are enforced
+        # below. verification_level records exactly how strong this check was.
+        embedded = None
+        try:
+            content = signed_data["encap_content_info"]["content"]
+            if content is not None:
+                native = content.native
+                if isinstance(native, (bytes, bytearray)):
+                    embedded = bytes(native)
+        except Exception:  # noqa: BLE001
+            embedded = None
+
+        if embedded is not None and embedded == payload_bytes:
+            bound = True  # the signed content IS our exact document
+        else:
+            bound = _verify_gost_digest(payload_bytes, md_value)
+
         if bound is True:
             verification_level = VERIFY_BOUND
             warnings.append(

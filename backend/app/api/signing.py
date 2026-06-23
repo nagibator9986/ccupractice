@@ -28,11 +28,8 @@ from ..models import (
     Signature,
     SigningRequest,
 )
-from ..services.signature_service import (
-    SignatureError,
-    parse_cms_signature,
-    payload_sha256,
-)
+from ..services.signature_service import SignatureError, payload_sha256
+from ..services.signature_verification import verify_cms_signature
 from ..utils.auth import admin_required
 from ..utils.serializers import get_json_safe
 from ..utils.time import utc_now
@@ -383,7 +380,7 @@ def public_submit(token: str):
     payload_bytes = payload_path.read_bytes()
 
     try:
-        parsed = parse_cms_signature(cms_b64, payload_bytes)
+        parsed = verify_cms_signature(cms_b64, payload_bytes)
     except SignatureError as exc:
         return jsonify(error=str(exc)), 400
 
