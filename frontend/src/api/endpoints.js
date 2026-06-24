@@ -165,6 +165,11 @@ export const specialtiesApi = {
   remove: (id) => client.delete(`/specialties/${id}`).then((r) => r.data),
 };
 
+export const verifyApi = {
+  get: (code) => client.get(`/verify/${code}`).then((r) => r.data),
+  fileUrl: (code, fmt) => `${API_PREFIX}/verify/${code}/file/${fmt}`,
+};
+
 export const signaturesApi = {
   payloadHash: (contractId) =>
     client.get(`/signatures/contracts/${contractId}/payload-hash`).then((r) => r.data),

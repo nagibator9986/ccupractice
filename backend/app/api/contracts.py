@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from flask import Blueprint, current_app, jsonify, request, send_from_directory
@@ -196,8 +197,15 @@ def generate_contract(cid):
         # DRAFT -> GENERATED so the result is a consistent GENERATED contract.
         contract.status = ContractStatus.DRAFT
 
+    # Front-end origin (sent via axios as X-Public-Origin) is the URL we want
+    # the QR-stamp on the generated document to point at.
+    public_base = (
+        request.headers.get("X-Public-Origin")
+        or os.getenv("PUBLIC_BASE_URL")
+        or None
+    )
     try:
-        generate_contract_files(contract)
+        generate_contract_files(contract, public_base=public_base)
     except Exception as exc:  # noqa: BLE001
         current_app.logger.exception("Contract generation failed: %s", exc)
         db.session.rollback()

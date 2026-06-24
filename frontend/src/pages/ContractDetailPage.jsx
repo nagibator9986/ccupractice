@@ -283,6 +283,26 @@ export default function ContractDetailPage() {
                 <button className="btn-dark" onClick={downloadReport}>📑 Отчёт подписания</button>
               )}
             </div>
+
+            {contract.verification_code && (
+              <div className="mt-4 rounded-xl bg-coral-50/40 ring-1 ring-coral-100 p-3 flex flex-wrap items-center gap-3 text-sm">
+                <span className="text-xl">🔍</span>
+                <div className="flex-1 min-w-[200px]">
+                  <div className="text-charcoal-700 font-semibold">Публичная страница проверки</div>
+                  <div className="text-xs text-charcoal-500">
+                    QR-код на DOCX/PDF ведёт сюда. Любой может отсканировать и увидеть статус подписей.
+                  </div>
+                </div>
+                <a
+                  className="btn-secondary text-xs"
+                  href={`/verify/${contract.verification_code}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Открыть /verify/{contract.verification_code.slice(0, 8)}…
+                </a>
+              </div>
+            )}
           </div>
 
           {isAdmin && (

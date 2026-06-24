@@ -1,5 +1,16 @@
+import secrets
+
 from ..utils.time import utc_now, utc_today
 from ..extensions import db
+
+
+def _generate_verification_code() -> str:
+    """16-char URL-safe verification token for QR-stamp routing.
+
+    The same code persists for the lifetime of the contract — the QR printed
+    on the document keeps working even if the document is regenerated.
+    """
+    return secrets.token_urlsafe(12)
 
 
 class ContractStatus:
@@ -29,6 +40,15 @@ class Contract(db.Model):
     number = db.Column(db.String(40), unique=True, nullable=False, index=True)
     year = db.Column(db.Integer, nullable=False, index=True)
     contract_date = db.Column(db.Date, default=utc_today, nullable=False)
+    # Stable, URL-safe code used to address this contract on the public
+    # /verify/<code> page (printed in QR stamp on every generated DOCX/PDF).
+    verification_code = db.Column(
+        db.String(24),
+        unique=True,
+        index=True,
+        nullable=False,
+        default=_generate_verification_code,
+    )
 
     partner_id = db.Column(db.Integer, db.ForeignKey("partners.id"), nullable=False)
     student_id = db.Column(db.Integer, db.ForeignKey("students.id"), nullable=False)
@@ -53,6 +73,7 @@ class Contract(db.Model):
             "id": self.id,
             "number": self.number,
             "year": self.year,
+            "verification_code": self.verification_code,
             "contract_date": self.contract_date.isoformat() if self.contract_date else None,
             "partner_id": self.partner_id,
             "partner_name": self.partner.organization_name if self.partner else None,

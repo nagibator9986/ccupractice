@@ -13,6 +13,7 @@ import DataPage from "./pages/DataPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import PublicSignPage from "./pages/PublicSignPage.jsx";
 import EnrollmentSignPage from "./pages/EnrollmentSignPage.jsx";
+import VerifyPage from "./pages/VerifyPage.jsx";
 import { useAuth } from "./context/AuthContext.jsx";
 
 function ProtectedRoute({ children }) {
@@ -34,6 +35,7 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/sign/:token" element={<PublicSignPage />} />
       <Route path="/enroll-sign/:token" element={<EnrollmentSignPage />} />
+      <Route path="/verify/:code" element={<VerifyPage />} />
       <Route
         path="/"
         element={

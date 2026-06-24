@@ -1,23 +1,35 @@
 """Generate contract DOCX and PDF files from the configured template."""
 from __future__ import annotations
 
+import io
 import shutil
 import subprocess
 import tempfile
 from datetime import date
 from pathlib import Path
 
+from docx import Document
+from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+from docx.shared import Cm, Mm, Pt, RGBColor
 from docxtpl import DocxTemplate
 from flask import current_app
 
 from ..models import Contract, CollegeSettings, Partner, Student
 from ..utils.files import safe_filename, ensure_dir
+from .qr import generate_qr_png, public_verify_url
 
 
 _MONTHS_RU = [
     "", "января", "февраля", "марта", "апреля", "мая", "июня",
     "июля", "августа", "сентября", "октября", "ноября", "декабря",
 ]
+
+# Brand colours sampled from the CCU logo (coral + charcoal).
+_BRAND_CORAL = RGBColor(0xE8, 0x5A, 0x3F)
+_BRAND_CHARCOAL = RGBColor(0x46, 0x48, 0x4B)
 
 
 def _fmt_date(value: date | None) -> str:
@@ -105,6 +117,174 @@ def _archive_filename(contract: Contract, ext: str) -> str:
     return f"{base}.{ext}"
 
 
+# ────────────────────────────────────────────────────────────────
+# Verification stamp (QR + footer) — appended after the body render
+# ────────────────────────────────────────────────────────────────
+
+def _set_cell_shading(cell, hex_color: str) -> None:
+    """Apply a solid background fill to a DOCX table cell."""
+    tc_pr = cell._tc.get_or_add_tcPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), hex_color)
+    tc_pr.append(shd)
+
+
+def _add_page_number_field(paragraph) -> None:
+    """Insert a `PAGE` field at the end of a paragraph (Word page numbering)."""
+    run = paragraph.add_run()
+    fld_char_begin = OxmlElement("w:fldChar")
+    fld_char_begin.set(qn("w:fldCharType"), "begin")
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = "PAGE"
+    fld_char_end = OxmlElement("w:fldChar")
+    fld_char_end.set(qn("w:fldCharType"), "end")
+    run._r.append(fld_char_begin)
+    run._r.append(instr)
+    run._r.append(fld_char_end)
+
+
+def _build_footer_band(doc: Document, contract: Contract) -> None:
+    """Doodocs-style verification band at the bottom of every page.
+
+    A 2-column 1-row table — left cell shows the platform name and contract id,
+    right cell shows "стр. N" with a live page-number field.
+    """
+    for section in doc.sections:
+        # Drop any prior generated footer band so re-runs do not duplicate it.
+        footer = section.footer
+        footer.is_linked_to_previous = False
+        for p in list(footer.paragraphs):
+            p_elem = p._element
+            p_elem.getparent().remove(p_elem)
+        for tbl in list(footer.tables):
+            tbl._element.getparent().remove(tbl._element)
+
+        tbl = footer.add_table(rows=1, cols=2, width=Cm(17))
+        tbl.autofit = True
+        left, right = tbl.rows[0].cells
+        left.width = Cm(14)
+        right.width = Cm(3)
+
+        # Left cell: brand line.
+        _set_cell_shading(left, "F1F4F6")
+        lp = left.paragraphs[0]
+        lp.paragraph_format.space_before = Pt(0)
+        lp.paragraph_format.space_after = Pt(0)
+        run = lp.add_run("● ")
+        run.font.color.rgb = _BRAND_CORAL
+        run.font.size = Pt(10)
+        run.font.bold = True
+        run = lp.add_run("Визуализация электронного документа · ")
+        run.font.size = Pt(8)
+        run.font.color.rgb = _BRAND_CHARCOAL
+        run = lp.add_run(
+            f"CCU PRACTICUM · договор № {contract.number}"
+        )
+        run.font.size = Pt(8)
+        run.font.color.rgb = _BRAND_CHARCOAL
+        run.font.bold = True
+
+        # Right cell: "стр. N".
+        _set_cell_shading(right, "F1F4F6")
+        rp = right.paragraphs[0]
+        rp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        rp.paragraph_format.space_before = Pt(0)
+        rp.paragraph_format.space_after = Pt(0)
+        run = rp.add_run("стр. ")
+        run.font.size = Pt(8)
+        run.font.color.rgb = _BRAND_CHARCOAL
+        _add_page_number_field(rp)
+        # Style the page-number run too.
+        for r in rp.runs:
+            r.font.size = Pt(8)
+            r.font.color.rgb = _BRAND_CHARCOAL
+
+
+def _add_verification_block(doc: Document, contract: Contract, verify_url: str) -> None:
+    """Append a final "Проверка подлинности" block with a large QR code.
+
+    Layout: section break → header "Список подписей" → 2-col table
+    [QR image] [explanation + verify URL + verification code]. Mirrors the
+    doodocs.kz signed-document visualization page.
+    """
+    doc.add_section()
+
+    head = doc.add_paragraph()
+    head.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    h = head.add_run("Список подписей")
+    h.bold = True
+    h.font.size = Pt(20)
+    h.font.color.rgb = _BRAND_CHARCOAL
+
+    intro = doc.add_paragraph()
+    ir = intro.add_run(
+        "Документ согласно п. 1 ст. 7 ЗРК от 7 января 2003 года № 370-II "
+        "«Об электронном документе и электронной цифровой подписи» равнозначен "
+        "документу на бумажном носителе при наличии действительных ЭЦП всех сторон."
+    )
+    ir.font.size = Pt(10)
+    ir.font.color.rgb = _BRAND_CHARCOAL
+
+    # QR + caption table
+    tbl = doc.add_table(rows=1, cols=2)
+    tbl.autofit = False
+    qr_cell, info_cell = tbl.rows[0].cells
+    qr_cell.width = Cm(4.5)
+    info_cell.width = Cm(12)
+
+    # Generate QR PNG (≈ 3.5 cm printed)
+    png = generate_qr_png(verify_url, box_size=10, border=2)
+    qp = qr_cell.paragraphs[0]
+    qp.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    qp.add_run().add_picture(io.BytesIO(png), width=Cm(3.8))
+
+    # Info column
+    info_cell.vertical_alignment = WD_ALIGN_VERTICAL.TOP
+    ip = info_cell.paragraphs[0]
+    r = ip.add_run("Проверить подлинность подписания")
+    r.bold = True
+    r.font.size = Pt(12)
+    r.font.color.rgb = _BRAND_CHARCOAL
+
+    p = info_cell.add_paragraph()
+    r = p.add_run(
+        "Отсканируйте QR-код камерой смартфона или откройте ссылку:"
+    )
+    r.font.size = Pt(10)
+    r.font.color.rgb = _BRAND_CHARCOAL
+
+    p = info_cell.add_paragraph()
+    r = p.add_run(verify_url)
+    r.font.size = Pt(10)
+    r.font.color.rgb = _BRAND_CORAL
+    r.font.bold = True
+
+    p = info_cell.add_paragraph()
+    r = p.add_run(f"Код документа: {contract.verification_code}")
+    r.font.size = Pt(9)
+    r.font.color.rgb = _BRAND_CHARCOAL
+    r.italic = True
+
+    p = info_cell.add_paragraph()
+    r = p.add_run(
+        "Страница проверки покажет всех подписантов, ФИО / ИИН и хэш SHA-256 "
+        "подписанного документа в режиме реального времени."
+    )
+    r.font.size = Pt(9)
+    r.font.color.rgb = _BRAND_CHARCOAL
+
+
+def _apply_verification_stamp(docx_path: Path, contract: Contract, verify_url: str) -> None:
+    """Open the rendered DOCX, embed the verification stamp, save in-place."""
+    doc = Document(str(docx_path))
+    _build_footer_band(doc, contract)
+    _add_verification_block(doc, contract, verify_url)
+    doc.save(str(docx_path))
+
+
 def _convert_to_pdf(docx_path: Path) -> Path | None:
     """Best-effort DOCX -> PDF conversion using LibreOffice (`soffice`).
 
@@ -153,7 +333,14 @@ def _convert_to_pdf(docx_path: Path) -> Path | None:
     return pdf_path if pdf_path.exists() else None
 
 
-def generate_contract_files(contract: Contract) -> Contract:
+def generate_contract_files(contract: Contract, *, public_base: str | None = None) -> Contract:
+    """Render → stamp with QR → convert to PDF.
+
+    `public_base` is the absolute origin the QR-code URL should point at
+    (typically the request's `X-Public-Origin` header). If omitted, falls back
+    to env `PUBLIC_BASE_URL`; if neither is available, the QR encodes the
+    relative path `/verify/<code>`.
+    """
     template = _template_path()
     archive_dir = _archive_dir(contract)
 
@@ -164,12 +351,20 @@ def generate_contract_files(contract: Contract) -> Contract:
     tpl.render(_build_context(contract))
     tpl.save(str(docx_full))
 
+    # Embed verification stamp on every page + final QR block — this rewrites
+    # the file before any signing happens, so the signed payload always
+    # includes the QR + URL (a signer sees what they sign).
+    verify_url = public_verify_url(contract.verification_code, base_url=public_base)
+    try:
+        _apply_verification_stamp(docx_full, contract, verify_url)
+    except Exception:
+        current_app.logger.exception(
+            "Verification stamp embedding failed for contract %s", contract.id
+        )
+
     contract.docx_path = str(docx_full.relative_to(current_app.config["ARCHIVE_FOLDER"]))
 
     # The DOCX was just rewritten, so any previously produced PDF is now stale.
-    # Clear pdf_path first and delete the deterministic old file BEFORE trying to
-    # reconvert, so a failed reconversion can never leave a downloadable PDF that
-    # no longer matches the (signable) DOCX bytes.
     contract.pdf_path = None
     stale_pdf = docx_full.with_suffix(".pdf")
     try:
