@@ -158,6 +158,52 @@ export const enrollmentsApi = {
     `${API_PREFIX}/enrollments/public/${token}/download/${document}/pdf?inline=1`,
 };
 
+// Mirror of enrollmentsApi shape so frontend file patterns transfer 1:1 to
+// the LmsContractsPage. The LMS aggregate has a SINGLE document (no
+// /<document> path segment on payload/submit/download endpoints).
+export const lmsContractsApi = {
+  list: (params) => client.get("/lms-contracts", { params }).then((r) => r.data),
+  get: (id) => client.get(`/lms-contracts/${id}`).then((r) => r.data),
+  suggestNumber: (year) =>
+    client.get("/lms-contracts/suggest-number", { params: { year } }).then((r) => r.data),
+  grantStudents: () =>
+    client.get("/lms-contracts/grant-students").then((r) => r.data),
+  create: (data) => client.post("/lms-contracts", data).then((r) => r.data),
+  update: (id, data) => client.put(`/lms-contracts/${id}`, data).then((r) => r.data),
+  generate: (id, payload) =>
+    client.post(`/lms-contracts/${id}/generate`, payload || {}).then((r) => r.data),
+  remove: (id) => client.delete(`/lms-contracts/${id}`).then((r) => r.data),
+  downloadDoc: (id, fmt, filename) =>
+    blobDownload(`/lms-contracts/${id}/download/${fmt}`, filename),
+  invite: (id, payload) =>
+    client.post(`/lms-contracts/${id}/invite`, payload || {}).then((r) => r.data),
+  listRequests: (id) =>
+    client.get(`/lms-contracts/${id}/requests`).then((r) => r.data),
+  revoke: (rid) => client.post(`/lms-contracts/requests/${rid}/revoke`).then((r) => r.data),
+  resend: (rid) => client.post(`/lms-contracts/requests/${rid}/resend`).then((r) => r.data),
+  // Public (token-based) signing flow — single document, no /<document> segment.
+  publicView: (token) =>
+    client.get(`/lms-contracts/public/${token}`).then((r) => r.data),
+  publicMarkViewed: (token) =>
+    client.post(`/lms-contracts/public/${token}/view`).then((r) => r.data),
+  publicPayload: (token) =>
+    client.get(`/lms-contracts/public/${token}/payload`).then((r) => r.data),
+  publicSubmit: (token, cms) =>
+    client.post(`/lms-contracts/public/${token}/submit`, { cms }).then((r) => r.data),
+  publicDownloadUrl: (token, fmt) =>
+    `${API_PREFIX}/lms-contracts/public/${token}/download/${fmt}`,
+  publicPreviewUrl: (token) =>
+    `${API_PREFIX}/lms-contracts/public/${token}/download/pdf?inline=1`,
+};
+
+// Convenience to toggle the grant flag from the Students page (admin-only on
+// the backend). Living next to lmsContractsApi keeps the LMS-related API
+// surface co-located.
+export const studentGrantApi = {
+  setFlag: (sid, isGrant) =>
+    client.put(`/students/${sid}/grant`, { is_grant_student: !!isGrant }).then((r) => r.data),
+};
+
 export const specialtiesApi = {
   list: (params) => client.get("/specialties", { params }).then((r) => r.data),
   create: (data) => client.post("/specialties", data).then((r) => r.data),

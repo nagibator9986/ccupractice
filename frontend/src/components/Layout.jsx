@@ -9,6 +9,7 @@ const NAV = [
   { to: "/students", label: "Студенты", icon: StudentsIcon },
   { to: "/contracts", label: "Договоры практики", icon: ContractsIcon },
   { to: "/enrollments", label: "Договоры со студентами", icon: EnrollmentIcon },
+  { to: "/lms-contracts", label: "LMS-договоры", icon: LmsIcon, chip: "Грантники" },
   { to: "/archive", label: "Электронный архив", icon: ArchiveIcon },
   { to: "/data", label: "Данные", icon: DataIcon, adminOnly: true },
   { to: "/settings", label: "Настройки", icon: SettingsIcon, adminOnly: true },
@@ -59,7 +60,19 @@ export default function Layout() {
                     <n.icon className="h-4 w-4" />
                   </span>
                   <span>{n.label}</span>
-                  {isActive && (
+                  {n.chip && (
+                    <span
+                      className={clsx(
+                        "ml-auto inline-flex items-center text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-md",
+                        isActive
+                          ? "bg-white/25 text-white"
+                          : "bg-coral-100 text-coral-700",
+                      )}
+                    >
+                      {n.chip}
+                    </span>
+                  )}
+                  {isActive && !n.chip && (
                     <span className="absolute right-3 h-1.5 w-1.5 rounded-full bg-white" />
                   )}
                 </>
@@ -172,6 +185,15 @@ function EnrollmentIcon(p) {
       <path d="M22 10L12 5 2 10l10 5 10-5z" />
       <path d="M6 12v5c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-5" />
       <path d="M12 15v4" />
+    </svg>
+  );
+}
+function LmsIcon(p) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <rect x="3" y="4" width="18" height="14" rx="2" />
+      <path d="M3 9h18" />
+      <path d="M8 13l2 2 4-4" />
     </svg>
   );
 }

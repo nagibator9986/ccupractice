@@ -29,7 +29,6 @@ from ..models import (
     DOC_CONTRACT,
     DOC_CONSENT,
     PARTY_PARENT,
-    signing_matrix,
 )
 from ..services.enrollment_documents import generate_enrollment_files
 from ..services.signature_service import SignatureError, payload_sha256
@@ -98,9 +97,6 @@ def _apply(e: EnrollmentContract, data: dict) -> None:
             setattr(e, field, parse_int(data.get(field)))
     if "notes" in data:
         e.notes = clean_str(data.get("notes"))
-    if "include_lms" in data:
-        val = data.get("include_lms")
-        e.include_lms = val if isinstance(val, bool) else str(val).strip().lower() in ("1", "true", "yes", "on")
     # Keep the year in sync with the (manual) contract date.
     if e.contract_date:
         e.year = e.contract_date.year
@@ -299,8 +295,8 @@ def delete_enrollment(eid):
     e = EnrollmentContract.query.get_or_404(eid)
     archive_base = Path(current_app.config["ARCHIVE_FOLDER"])
     files = [archive_base / rel for rel in (
-        e.contract_docx_path, e.contract_pdf_path, e.consent_docx_path, e.consent_pdf_path,
-        e.lms_docx_path, e.lms_pdf_path,
+        e.contract_docx_path, e.contract_pdf_path,
+        e.consent_docx_path, e.consent_pdf_path,
     ) if rel]
 
     db.session.delete(e)

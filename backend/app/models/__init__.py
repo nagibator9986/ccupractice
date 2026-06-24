@@ -22,6 +22,14 @@ from .enrollment import (
     PARTY_STUDENT,
     PARTY_PARENT,
 )
+from .lms_contract import (
+    LmsContract,
+    LmsSignature,
+    LmsSigningRequest,
+    LmsStatus,
+    lms_signing_matrix,
+    suggest_lms_number,
+)
 
 __all__ = [
     "User",
@@ -48,4 +56,10 @@ __all__ = [
     "DOC_LMS",
     "PARTY_STUDENT",
     "PARTY_PARENT",
+    "LmsContract",
+    "LmsSignature",
+    "LmsSigningRequest",
+    "LmsStatus",
+    "lms_signing_matrix",
+    "suggest_lms_number",
 ]

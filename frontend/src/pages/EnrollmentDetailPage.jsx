@@ -19,7 +19,7 @@ const EDITABLE = [
   "parent_full_name", "parent_relation", "parent_iin", "parent_id_doc_number", "parent_id_doc_issued_by",
   "parent_address", "parent_phone", "parent_email",
   "specialty", "specialty_code", "qualification", "education_base", "study_form", "course",
-  "tuition_year_amount", "include_lms", "notes",
+  "tuition_year_amount", "notes",
 ];
 
 function Section({ title, children, extra }) {
@@ -215,17 +215,9 @@ export default function EnrollmentDetailPage() {
               <TextField label="Дата договора" type="date" value={form.contract_date} onChange={(v) => set("contract_date", v)} disabled={!isAdmin} />
               <SelectField label="База образования" value={form.education_base} onChange={(v) => set("education_base", v)} options={[{ value: "9", label: "После 9 класса" }, { value: "11", label: "После 11 класса" }]} disabled={!isAdmin} />
             </div>
-            <label className="flex items-center gap-2 mt-3 text-sm text-charcoal-700 cursor-pointer">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-charcoal-300 text-coral-600 focus:ring-coral-500"
-                checked={!!form.include_lms}
-                disabled={!isAdmin}
-                onChange={(e) => set("include_lms", e.target.checked)}
-              />
-              Включить «Договор о подключении к Caspian Digital»
-              <span className="text-[11px] text-charcoal-400">— после изменения нажмите «Сформировать документы»</span>
-            </label>
+            <div className="mt-3 rounded-xl bg-coral-50/40 ring-1 ring-coral-100 px-3 py-2 text-xs text-charcoal-600">
+              💡 «Договор о подключении к Caspian Digital» (ЛМС) теперь оформляется отдельно — в разделе <b>LMS-договоры</b>. Доступен только студентам с флагом «Грантник».
+            </div>
           </Section>
 
           <Section title="Абитуриент (обучающийся)">

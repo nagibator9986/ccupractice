@@ -146,11 +146,11 @@ def _add_page_number_field(paragraph) -> None:
     run._r.append(fld_char_end)
 
 
-def _build_footer_band(doc: Document, contract: Contract) -> None:
+def _footer_band(doc: Document, *, brand_line: str) -> None:
     """Doodocs-style verification band at the bottom of every page.
 
-    A 2-column 1-row table — left cell shows the platform name and contract id,
-    right cell shows "стр. N" with a live page-number field.
+    Generic over the document type: ``brand_line`` is the right-of-bullet text
+    (e.g. ``"CCU PRACTICUM · договор № X"`` or ``"CCU PRACTICUM · LMS-договор № Y"``).
     """
     for section in doc.sections:
         # Drop any prior generated footer band so re-runs do not duplicate it.
@@ -180,9 +180,7 @@ def _build_footer_band(doc: Document, contract: Contract) -> None:
         run = lp.add_run("Визуализация электронного документа · ")
         run.font.size = Pt(8)
         run.font.color.rgb = _BRAND_CHARCOAL
-        run = lp.add_run(
-            f"CCU PRACTICUM · договор № {contract.number}"
-        )
+        run = lp.add_run(brand_line)
         run.font.size = Pt(8)
         run.font.color.rgb = _BRAND_CHARCOAL
         run.font.bold = True
@@ -203,7 +201,7 @@ def _build_footer_band(doc: Document, contract: Contract) -> None:
             r.font.color.rgb = _BRAND_CHARCOAL
 
 
-def _add_verification_block(doc: Document, contract: Contract, verify_url: str) -> None:
+def _verification_block(doc: Document, *, verify_url: str, verification_code: str) -> None:
     """Append a final "Проверка подлинности" block with a large QR code.
 
     Layout: section break → header "Список подписей" → 2-col table
@@ -263,7 +261,7 @@ def _add_verification_block(doc: Document, contract: Contract, verify_url: str) 
     r.font.bold = True
 
     p = info_cell.add_paragraph()
-    r = p.add_run(f"Код документа: {contract.verification_code}")
+    r = p.add_run(f"Код документа: {verification_code}")
     r.font.size = Pt(9)
     r.font.color.rgb = _BRAND_CHARCOAL
     r.italic = True
@@ -277,12 +275,34 @@ def _add_verification_block(doc: Document, contract: Contract, verify_url: str) 
     r.font.color.rgb = _BRAND_CHARCOAL
 
 
-def _apply_verification_stamp(docx_path: Path, contract: Contract, verify_url: str) -> None:
-    """Open the rendered DOCX, embed the verification stamp, save in-place."""
+def apply_verification_stamp(
+    docx_path: Path | str,
+    *,
+    brand_line: str,
+    verification_code: str,
+    verify_url: str,
+) -> None:
+    """Open the rendered DOCX, embed the per-page footer + final QR block, save in-place.
+
+    Generic — used by both the practicum contract generator and the standalone
+    LMS-contract generator. ``brand_line`` is what appears next to the bullet in
+    the page footer (e.g. ``"CCU PRACTICUM · договор № X"``); ``verification_code``
+    is printed in plain text under the QR for OCR fallback.
+    """
     doc = Document(str(docx_path))
-    _build_footer_band(doc, contract)
-    _add_verification_block(doc, contract, verify_url)
+    _footer_band(doc, brand_line=brand_line)
+    _verification_block(doc, verify_url=verify_url, verification_code=verification_code)
     doc.save(str(docx_path))
+
+
+def _apply_verification_stamp(docx_path: Path, contract: Contract, verify_url: str) -> None:
+    """Practicum-contract backward-compatible wrapper."""
+    apply_verification_stamp(
+        docx_path,
+        brand_line=f"CCU PRACTICUM · договор № {contract.number}",
+        verification_code=contract.verification_code,
+        verify_url=verify_url,
+    )
 
 
 def _convert_to_pdf(docx_path: Path) -> Path | None:

@@ -13,6 +13,9 @@ import DataPage from "./pages/DataPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import PublicSignPage from "./pages/PublicSignPage.jsx";
 import EnrollmentSignPage from "./pages/EnrollmentSignPage.jsx";
+import LmsContractsPage from "./pages/LmsContractsPage.jsx";
+import LmsContractDetailPage from "./pages/LmsContractDetailPage.jsx";
+import LmsSignPage from "./pages/LmsSignPage.jsx";
 import VerifyPage from "./pages/VerifyPage.jsx";
 import { useAuth } from "./context/AuthContext.jsx";
 
@@ -35,6 +38,7 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/sign/:token" element={<PublicSignPage />} />
       <Route path="/enroll-sign/:token" element={<EnrollmentSignPage />} />
+      <Route path="/lms-sign/:token" element={<LmsSignPage />} />
       <Route path="/verify/:code" element={<VerifyPage />} />
       <Route
         path="/"
@@ -51,6 +55,8 @@ export default function App() {
         <Route path="contracts/:id" element={<ContractDetailPage />} />
         <Route path="enrollments" element={<EnrollmentsPage />} />
         <Route path="enrollments/:id" element={<EnrollmentDetailPage />} />
+        <Route path="lms-contracts" element={<LmsContractsPage />} />
+        <Route path="lms-contracts/:id" element={<LmsContractDetailPage />} />
         <Route path="archive" element={<ArchivePage />} />
         <Route path="data" element={<DataPage />} />
         <Route path="settings" element={<SettingsPage />} />

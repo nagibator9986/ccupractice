@@ -12,7 +12,6 @@ from ..models import (
     EnrollmentContract,
     DOC_CONTRACT,
     DOC_CONSENT,
-    DOC_LMS,
     ADULT_SIGN_AGE,
 )
 from ..utils.files import safe_filename, ensure_dir
@@ -112,7 +111,6 @@ def _archive_dir(e: EnrollmentContract) -> Path:
 _STEMS = {
     DOC_CONTRACT: "Договор_ОУ",
     DOC_CONSENT: "Согласие_ПДн",
-    DOC_LMS: "Договор_Caspian_Digital",
 }
 
 
@@ -200,24 +198,8 @@ def generate_enrollment_files(e: EnrollmentContract) -> EnrollmentContract:
     try:
         _render_one(e, DOC_CONTRACT, templates["contract"], context, archive_dir, written)
         _render_one(e, DOC_CONSENT, templates["consent"], context, archive_dir, written)
-        if e.include_lms:
-            _render_one(e, DOC_LMS, templates["lms"], context, archive_dir, written)
-        else:
-            # Opted out (or toggled off after a prior generation): drop any stale
-            # LMS files + DB paths so the document set stays consistent.
-            _clear_document(e, DOC_LMS)
     except Exception:
         for path in written:
             _unlink_quietly(path, "partially-generated enrollment file")
         raise
     return e
-
-
-def _clear_document(e: EnrollmentContract, document: str) -> None:
-    """Remove a document's generated files + DB paths (used when LMS is off)."""
-    archive_root = current_app.config["ARCHIVE_FOLDER"]
-    for fmt in ("docx", "pdf"):
-        rel = e.doc_path(document, fmt)
-        if rel:
-            _unlink_quietly(Path(archive_root) / rel, f"disabled {document} file")
-        setattr(e, f"{document}_{fmt}_path", None)

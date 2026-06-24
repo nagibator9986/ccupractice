@@ -35,6 +35,17 @@ class Student(db.Model):
     practice_type = db.Column(db.String(120), default="профессиональной")
     form_of_study = db.Column(db.String(60), default="очная")
 
+    # Grant ("госзаказ") flag — gates standalone LMS-contract creation. Toggled
+    # from the Students page by an admin; the API additionally enforces a CHECK
+    # constraint at the LmsContract level so a non-grant row can never persist.
+    is_grant_student = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False,
+        server_default="0",
+        index=True,
+    )
+
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=utc_now)
     updated_at = db.Column(db.DateTime, default=utc_now, onupdate=utc_now)
@@ -66,6 +77,7 @@ class Student(db.Model):
             "enrollment_year": self.enrollment_year,
             "practice_type": self.practice_type,
             "form_of_study": self.form_of_study,
+            "is_grant_student": bool(self.is_grant_student),
             "notes": self.notes,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

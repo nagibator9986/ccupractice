@@ -3,7 +3,7 @@ from flask_jwt_extended import jwt_required
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from ..extensions import db
-from ..models import Student, Partner, Contract
+from ..models import Student, Partner, Contract, LmsContract, LmsStatus
 from ..utils.auth import admin_required
 from ..utils.serializers import (
     clean_str,
@@ -56,6 +56,12 @@ def list_students():
         query = query.filter(Student.group_name == group)
     if partner_id:
         query = query.filter(Student.partner_id == partner_id)
+
+    is_grant_param = (request.args.get("is_grant") or "").strip().lower()
+    if is_grant_param in ("1", "true", "yes"):
+        query = query.filter(Student.is_grant_student.is_(True))
+    elif is_grant_param in ("0", "false", "no"):
+        query = query.filter(Student.is_grant_student.is_(False))
 
     items = query.order_by(Student.full_name.asc()).all()
     return jsonify(items=[s.to_dict() for s in items], total=len(items))
@@ -167,6 +173,19 @@ def _apply(student: Student, data: dict, *, skip=()) -> str | None:
     if "notes" in data:
         student.notes = clean_str(data.get("notes"))
 
+    # Grant flag — gates standalone LMS-contract creation. Accept ints/strings
+    # so the front-end can send any truthy form ("1", "true", boolean true).
+    if "is_grant_student" in data:
+        val = data.get("is_grant_student")
+        if isinstance(val, bool):
+            student.is_grant_student = val
+        elif isinstance(val, (int, float)):
+            student.is_grant_student = int(val) != 0
+        elif val is None:
+            student.is_grant_student = False
+        else:
+            student.is_grant_student = str(val).strip().lower() in ("1", "true", "yes", "on", "y")
+
     # FK validation: partner_id must reference an existing partner.
     if "partner_id" in data:
         pid = parse_int(data["partner_id"])
@@ -179,3 +198,52 @@ def _apply(student: Student, data: dict, *, skip=()) -> str | None:
     if student.practice_start and student.practice_end and student.practice_end < student.practice_start:
         return "Окончание практики не может быть раньше начала"
     return None
+
+
+@bp.put("/<int:sid>/grant")
+@admin_required
+def set_grant_flag(sid):
+    """Toggle the `is_grant_student` flag (grant / госзаказ).
+
+    Turning the flag OFF is blocked when the student still has a
+    non-completed LmsContract — the LMS-contract aggregate enforces a
+    grant-only invariant (CHECK constraint + service guard), so flipping the
+    Student row without first resolving the active LMS would create an
+    inconsistency.
+    """
+    student = Student.query.get_or_404(sid)
+    data = get_json_safe()
+    if "is_grant_student" not in data:
+        return jsonify(error="Не передано поле is_grant_student"), 400
+    val = data.get("is_grant_student")
+    if isinstance(val, bool):
+        new_flag = val
+    else:
+        new_flag = str(val).strip().lower() in ("1", "true", "yes", "on")
+
+    if student.is_grant_student and not new_flag:
+        # Blocked when an active (non-completed) LmsContract still references
+        # this student — the grant-only invariant must hold for as long as the
+        # LMS row exists.
+        blocking = (
+            LmsContract.query
+            .filter(LmsContract.student_id == sid)
+            .filter(LmsContract.status != LmsStatus.COMPLETED)
+            .first()
+        )
+        if blocking is not None:
+            return jsonify(
+                error="Нельзя снять отметку «Грантник» пока существует "
+                "незавершённый LMS-договор. Завершите договор и повторите.",
+                code="lms_contract_active",
+                lms_contract_id=blocking.id,
+                lms_contract_number=blocking.number,
+            ), 409
+
+    student.is_grant_student = bool(new_flag)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify(error="Не удалось обновить отметку"), 409
+    return jsonify(item=student.to_dict())
