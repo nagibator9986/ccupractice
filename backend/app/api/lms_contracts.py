@@ -404,6 +404,12 @@ def generate(lid):
 @bp.get("/<int:lid>/download/<string:fmt>")
 @jwt_required()
 def download(lid, fmt):
+    """LMS contract download.
+
+    PDF on signed LMS contracts gets a signature-certificate annex appended.
+    DOCX stays raw (signed payload). ``?inline=1`` previews in-browser without
+    triggering a download.
+    """
     lms = LmsContract.query.get_or_404(lid)
     if fmt not in ("docx", "pdf"):
         return jsonify(error="Файл не найден"), 404
@@ -411,9 +417,28 @@ def download(lid, fmt):
     if not rel:
         return jsonify(error="Файл не найден"), 404
     inline = request.args.get("inline") in ("1", "true", "yes")
-    return send_from_directory(
-        current_app.config["ARCHIVE_FOLDER"], rel, as_attachment=not inline
-    )
+    archive_root = current_app.config["ARCHIVE_FOLDER"]
+
+    # For signed LMS PDFs, merge in the signature certificate.
+    if fmt == "pdf" and (lms.signatures or []):
+        from ..services.pdf_visualization import merge_lms_pdf
+        from flask import send_file
+        base_pdf = Path(archive_root) / rel
+        public_base = request.headers.get("X-Public-Origin") or None
+        try:
+            merged = merge_lms_pdf(lms, base_pdf, public_base=public_base)
+        except Exception as exc:  # noqa: BLE001
+            current_app.logger.exception("LMS PDF merge failed: %s", exc)
+            merged = base_pdf
+        if merged and Path(merged).is_file():
+            return send_file(
+                str(merged),
+                as_attachment=not inline,
+                download_name=Path(rel).name,
+                mimetype="application/pdf",
+            )
+
+    return send_from_directory(archive_root, rel, as_attachment=not inline)
 
 
 @bp.delete("/<int:lid>")

@@ -413,11 +413,13 @@ def public_verify_file(code: str, fmt: str):
     annex appended; DOCX downloads stay raw (legal signed payload).
     """
     rel: str | None = None
-    is_enrollment = False
-    enr_obj: EnrollmentContract | None = None
+    entity = None     # the resolved row (Contract / LmsContract / EnrollmentContract)
+    kind = None       # "practicum" | "lms" | "enrollment"
 
     contract: Contract | None = Contract.query.filter_by(verification_code=code).first()
     if contract:
+        kind = "practicum"
+        entity = contract
         if fmt == "docx":
             rel = contract.docx_path
         elif fmt == "pdf":
@@ -425,6 +427,8 @@ def public_verify_file(code: str, fmt: str):
     else:
         lms = LmsContract.query.filter_by(verify_code=code).first()
         if lms:
+            kind = "lms"
+            entity = lms
             if fmt == "docx":
                 rel = lms.docx_path
             elif fmt == "pdf":
@@ -433,6 +437,8 @@ def public_verify_file(code: str, fmt: str):
             enr = EnrollmentContract.query.filter_by(verification_code=code).first()
             if not enr:
                 return jsonify(error="Документ не найден"), 404
+            kind = "enrollment"
+            entity = enr
             mapping = {
                 "docx":         ("contract", "docx"),
                 "pdf":          ("contract", "pdf"),
@@ -442,23 +448,30 @@ def public_verify_file(code: str, fmt: str):
             if fmt in mapping:
                 doc_key, ext = mapping[fmt]
                 rel = enr.doc_path(doc_key, ext)
-                is_enrollment = True
-                enr_obj = enr
     if not rel:
         return jsonify(error="Файл недоступен"), 404
 
     archive_root = current_app.config["ARCHIVE_FOLDER"]
-    # On enrollment PDF downloads with at least one signature, merge in the
-    # "Сертификат подписания" annex so the file SHOWS the signatures + QR.
-    if is_enrollment and enr_obj and fmt in ("pdf", "pdf-consent") and (enr_obj.signatures or []):
-        from ..services.pdf_visualization import merge_enrollment_pdf
+    # Merge the signature-certificate annex onto PDF downloads of signed
+    # documents — for ALL aggregates (practicum, LMS, enrollment). DOCX stays
+    # raw (legal signed payload).
+    is_pdf = fmt in ("pdf", "pdf-consent")
+    if is_pdf and entity and (entity.signatures or []):
         from flask import send_file, request as _req
+        from ..services.pdf_visualization import (
+            merge_enrollment_pdf, merge_lms_pdf, merge_practicum_pdf,
+        )
         base_pdf = Path(archive_root) / rel
         public_base = _req.headers.get("X-Public-Origin") or None
+        merger = {
+            "practicum":  merge_practicum_pdf,
+            "lms":        merge_lms_pdf,
+            "enrollment": merge_enrollment_pdf,
+        }[kind]
         try:
-            merged = merge_enrollment_pdf(enr_obj, base_pdf, public_base=public_base)
+            merged = merger(entity, base_pdf, public_base=public_base)
         except Exception as exc:  # noqa: BLE001
-            current_app.logger.exception("Verify PDF merge failed: %s", exc)
+            current_app.logger.exception("Verify PDF merge (%s) failed: %s", kind, exc)
             merged = base_pdf
         if merged and Path(merged).is_file():
             return send_file(

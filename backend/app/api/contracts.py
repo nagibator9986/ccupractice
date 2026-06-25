@@ -219,6 +219,11 @@ def generate_contract(cid):
 @bp.get("/<int:cid>/download/<string:fmt>")
 @jwt_required()
 def download(cid, fmt):
+    """Practicum contract download.
+
+    For PDF on contracts with signatures, merges the signature-report PDF
+    annex onto the original. DOCX stays raw (signed payload).
+    """
     contract = Contract.query.get_or_404(cid)
     fmt = fmt.lower()
     if fmt == "docx" and contract.docx_path:
@@ -233,8 +238,27 @@ def download(cid, fmt):
     else:
         return jsonify(error="Файл не найден"), 404
 
-    base_dir = Path(current_app.config["ARCHIVE_FOLDER"])
-    return send_from_directory(str(base_dir), rel, as_attachment=True)
+    archive_root = current_app.config["ARCHIVE_FOLDER"]
+
+    if fmt == "pdf" and (contract.signatures or []):
+        from ..services.pdf_visualization import merge_practicum_pdf
+        from flask import send_file
+        base_pdf = Path(archive_root) / rel
+        public_base = request.headers.get("X-Public-Origin") or None
+        try:
+            merged = merge_practicum_pdf(contract, base_pdf, public_base=public_base)
+        except Exception as exc:  # noqa: BLE001
+            current_app.logger.exception("Practicum PDF merge failed: %s", exc)
+            merged = base_pdf
+        if merged and Path(merged).is_file():
+            return send_file(
+                str(merged),
+                as_attachment=True,
+                download_name=Path(rel).name,
+                mimetype="application/pdf",
+            )
+
+    return send_from_directory(archive_root, rel, as_attachment=True)
 
 
 @bp.post("/<int:cid>/upload-scan")
