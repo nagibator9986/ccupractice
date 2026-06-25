@@ -120,10 +120,12 @@ class LmsContract(db.Model):
 
     __tablename__ = "lms_contracts"
     __table_args__ = (
-        # Grant-only invariant: a non-grant row must never reach the DB. Using
-        # the numeric (1) form so SQLite + PostgreSQL both accept the CHECK
-        # without coercion warnings.
-        db.CheckConstraint("is_grant_at_signing = 1", name="ck_lms_grant"),
+        # Grant-only invariant: a non-grant row must never reach the DB. The
+        # bare boolean column reference is truthy on both Postgres
+        # (``WHERE is_grant_at_signing``) and SQLite (stores bool as 0/1 and
+        # evaluates non-zero as true) — using ``= 1`` instead would crash on
+        # Postgres because the left side is BOOLEAN and the right is INTEGER.
+        db.CheckConstraint("is_grant_at_signing", name="ck_lms_grant"),
     )
 
     id = db.Column(db.Integer, primary_key=True)

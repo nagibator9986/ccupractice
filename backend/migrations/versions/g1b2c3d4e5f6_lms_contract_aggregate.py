@@ -105,13 +105,16 @@ def _generate_token(taken: set[str]) -> str:
 
 def upgrade():
     # ── 1) students.is_grant_student ─────────────────────────────────────────
+    # Use ``sa.false()`` so the dialect emits ``DEFAULT false`` on Postgres
+    # (which rejects ``DEFAULT 0`` on a BOOLEAN column) AND ``DEFAULT 0`` on
+    # SQLite — covered by the same SQLAlchemy compiler.
     with op.batch_alter_table('students', schema=None) as batch_op:
         batch_op.add_column(
             sa.Column(
                 'is_grant_student',
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text('0'),
+                server_default=sa.false(),
             )
         )
     op.create_index(
@@ -181,7 +184,12 @@ def upgrade():
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('number', name='uq_lms_contracts_number'),
         sa.UniqueConstraint('verify_code', name='uq_lms_contracts_verify_code'),
-        sa.CheckConstraint('is_grant_at_signing = 1', name='ck_lms_grant'),
+        # Cross-dialect grant-only invariant: a bare boolean column reference
+        # is truthy in PG ("WHERE is_grant_at_signing") and SQLite (which stores
+        # bool as 0/1 and evaluates non-zero as true), so the constraint holds
+        # for both back-ends without ``= 1`` (which Postgres rejects because the
+        # left side is BOOLEAN and the right side is INTEGER).
+        sa.CheckConstraint('is_grant_at_signing', name='ck_lms_grant'),
     )
     with op.batch_alter_table('lms_contracts', schema=None) as batch_op:
         batch_op.create_index(
@@ -325,12 +333,13 @@ def upgrade():
                     INSERT INTO students
                         (full_name, iin, is_grant_student, created_at, updated_at)
                     VALUES
-                        (:full_name, :iin, 1, :created_at, :updated_at)
+                        (:full_name, :iin, :is_grant, :created_at, :updated_at)
                     """
                 ),
                 {
                     "full_name": applicant_full_name,
                     "iin": applicant_iin,
+                    "is_grant": True,  # bind as boolean — driver casts per dialect
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -359,9 +368,9 @@ def upgrade():
             # Force the grant flag on for the grandfathered Student row.
             conn.execute(
                 sa.text(
-                    "UPDATE students SET is_grant_student = 1 WHERE id = :sid"
+                    "UPDATE students SET is_grant_student = :flag WHERE id = :sid"
                 ),
-                {"sid": student_id},
+                {"flag": True, "sid": student_id},
             )
 
         if student_id is None:
@@ -435,7 +444,7 @@ def upgrade():
                     :specialty, :specialty_code, :qualification,
                     :education_base, :study_form, :course,
                     :grant_order_number, :grant_order_date, :funding_source,
-                    1,
+                    :is_grant,
                     :docx_path, :pdf_path,
                     :status, :verify_code, :notes,
                     :created_at, :updated_at
@@ -476,6 +485,7 @@ def upgrade():
                 "grant_order_number": None,
                 "grant_order_date": None,
                 "funding_source": "госзаказ",
+                "is_grant": True,  # bind as boolean — driver casts per dialect
                 "docx_path": row["lms_docx_path"],  # bytes don't move
                 "pdf_path": row["lms_pdf_path"],
                 "status": new_status,
@@ -664,7 +674,7 @@ def downgrade():
         batch_op.add_column(
             sa.Column(
                 'include_lms', sa.Boolean(),
-                nullable=False, server_default=sa.text('0'),
+                nullable=False, server_default=sa.false(),
             )
         )
         batch_op.add_column(
@@ -683,13 +693,13 @@ def downgrade():
             sa.text(
                 """
                 UPDATE enrollment_contracts
-                   SET include_lms = 1,
+                   SET include_lms = :flag,
                        lms_docx_path = :docx,
                        lms_pdf_path = :pdf
                  WHERE id = :eid
                 """
             ),
-            {"docx": docx, "pdf": pdf, "eid": eid},
+            {"flag": True, "docx": docx, "pdf": pdf, "eid": eid},
         )
 
     if lms_to_enroll:

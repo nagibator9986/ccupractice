@@ -1,4 +1,7 @@
 from datetime import datetime
+
+import sqlalchemy as sa
+
 from ..utils.time import utc_now
 from ..extensions import db
 
@@ -42,7 +45,10 @@ class Student(db.Model):
         db.Boolean,
         nullable=False,
         default=False,
-        server_default="0",
+        # ``sa.false()`` emits ``DEFAULT false`` on Postgres (which rejects the
+        # bare integer literal on a BOOLEAN column) AND ``DEFAULT 0`` on SQLite
+        # — same column declaration, dialect-correct DDL.
+        server_default=sa.false(),
         index=True,
     )
 

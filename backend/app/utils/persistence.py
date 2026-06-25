@@ -200,6 +200,16 @@ def check_persistence(
                 report.persistent = False
 
     # ── Files ──
+    # The `instance/` directory only holds secrets (.secret_key,
+    # .jwt_secret_key, .seed_admin_password). If the corresponding env vars are
+    # set — which is the recommended production setup — those files are never
+    # consulted, so the directory does NOT need to be on a Volume. We still
+    # report it, but mark it as covered-by-env so the overall verdict isn't
+    # falsely red.
+    env_covered_instance = bool(
+        os.getenv("SECRET_KEY") and os.getenv("JWT_SECRET_KEY")
+    )
+
     for name, raw in (
         ("instance", instance_folder),
         ("archive", archive_folder),
@@ -207,14 +217,24 @@ def check_persistence(
     ):
         p = Path(raw)
         ok, why = _path_is_persistent(p, container_root)
+
+        effective_ok = ok
+        effective_why = why
+        if name == "instance" and not ok and env_covered_instance:
+            effective_ok = True
+            effective_why = (
+                f"{why}; covered by SECRET_KEY + JWT_SECRET_KEY env vars "
+                f"— no file fallback needed"
+            )
+
         report.items.append(PersistenceItem(
             name=name,
             kind="directory",
             path=str(p),
-            persistent=ok,
-            detail=why,
+            persistent=effective_ok,
+            detail=effective_why,
         ))
-        if not ok:
+        if not effective_ok:
             report.persistent = False
 
     # ── Hints ──
