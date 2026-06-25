@@ -131,6 +131,22 @@ def create_app() -> Flask:
     Path(app.config["ARCHIVE_FOLDER"]).mkdir(parents=True, exist_ok=True)
     Path(app.config["TEMPLATES_FOLDER"]).mkdir(parents=True, exist_ok=True)
 
+    # ── Persistence check (one of the most common reasons for "all my data
+    # disappeared after I redeployed"). On Railway / any container PaaS, the
+    # filesystem inside the container is wiped on every redeploy. We log a
+    # huge warning into stderr if SQLite or the file folders aren't on a
+    # mounted volume, and expose the report through /healthz so it's visible
+    # both in the Railway logs panel AND to any external monitor.
+    from .utils.persistence import check_persistence, log_persistence_report
+    persistence_report = check_persistence(
+        db_url=db_url,
+        archive_folder=app.config["ARCHIVE_FOLDER"],
+        upload_folder=app.config["UPLOAD_FOLDER"],
+        instance_folder=str(instance_dir),
+    )
+    log_persistence_report(persistence_report, app.logger)
+    app.config["PERSISTENCE_REPORT"] = persistence_report
+
     db.init_app(app)
     migrate.init_app(app, db)
 
@@ -204,12 +220,28 @@ def create_app() -> Flask:
 
     @app.get("/api/health")
     def health():
-        return jsonify(status="ok", service="CCU PRACTICUM")
+        report = app.config.get("PERSISTENCE_REPORT")
+        return jsonify(
+            status="ok",
+            service="CCU PRACTICUM",
+            persistent=bool(report and report.persistent),
+            persistence=(report.asdict() if report else None),
+        )
 
     # Liveness probe — process is up (no DB roundtrip).
     @app.get("/healthz")
     def healthz():
-        return jsonify(status="ok")
+        report = app.config.get("PERSISTENCE_REPORT")
+        body = {"status": "ok"}
+        if report is not None:
+            body["persistent"] = report.persistent
+            if not report.persistent:
+                # Surface the actionable hints right in the healthz body so
+                # they show up in Railway's "Recent deploys → View logs"
+                # panel without an SRE having to grep stderr.
+                body["persistence_warning"] = "data is on ephemeral storage — will be wiped on next redeploy"
+                body["persistence_hints"] = list(report.hints)
+        return jsonify(body)
 
     # Readiness probe — the DB is reachable. Point the platform's readiness
     # check here so a broken-DB deploy is marked unhealthy instead of serving
@@ -218,7 +250,13 @@ def create_app() -> Flask:
     def readyz():
         try:
             db.session.execute(db.text("SELECT 1"))
-            return jsonify(status="ready")
+            report = app.config.get("PERSISTENCE_REPORT")
+            body = {"status": "ready"}
+            if report is not None:
+                body["persistent"] = report.persistent
+                if not report.persistent:
+                    body["persistence_warning"] = "ephemeral storage — see /healthz for hints"
+            return jsonify(body)
         except Exception as exc:  # noqa: BLE001
             app.logger.warning("Readiness check failed: %s", exc)
             db.session.rollback()

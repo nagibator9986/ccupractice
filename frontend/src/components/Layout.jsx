@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
 import BrandLogo from "./BrandLogo.jsx";
+import PersistenceBanner from "./PersistenceBanner.jsx";
 import clsx from "clsx";
 
 const NAV = [
@@ -134,6 +135,10 @@ export default function Layout() {
           <button onClick={logout} className="btn-ghost text-xs">Выйти</button>
         </header>
         <div className="px-4 sm:px-8 py-6 lg:py-10 max-w-[1400px] mx-auto">
+          {/* Surfaces a coral alert when /api/health reports the platform is
+              running on ephemeral container storage (data will vanish on next
+              redeploy). Only the admin sees it — viewers can't fix it. */}
+          <PersistenceBanner enabled={isAdmin} />
           <Outlet />
         </div>
         <footer className="px-4 sm:px-8 py-6 text-center text-[11px] text-charcoal-400">
