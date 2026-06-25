@@ -14,7 +14,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 from flask import current_app
 
-from ..models import Contract, SigningRequest
+from ..models import Contract
 from ..utils.files import safe_filename
 from ..utils.time import utc_now
 

@@ -236,7 +236,7 @@ export default function PublicSignPage() {
 
       <footer className="text-center text-xs text-charcoal-400 mt-10 flex flex-col items-center gap-2">
         <img src="/ccu-logo.png" alt="" className="h-10 w-10 opacity-60" />
-        © {new Date().getFullYear()} College of Caspian University · CCU PRACTICUM
+        © {new Date().getFullYear()} Колледж УО «Каспийский общественный университет» · CCU PRACTICUM
       </footer>
     </Wrapper>
   );

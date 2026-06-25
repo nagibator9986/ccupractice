@@ -29,7 +29,6 @@ from ..models import (
     LmsStatus,
     PARTY_LABELS,
     PARTY_PARENT,
-    PARTY_STUDENT,
     Student,
     suggest_lms_number,
 )
@@ -738,7 +737,9 @@ def public_submit(token):
     try:
         parsed = verify_cms_signature(cms_b64, payload_bytes)
     except SignatureError as exc:
-        return jsonify(error="invalid_signature", detail=str(exc)), 400
+        # Mirror sibling handlers: human-readable Russian message in `error`,
+        # with the machine code surfaced separately for the SPA to switch on.
+        return jsonify(error=f"Подпись недействительна: {exc}", code="invalid_signature"), 400
 
     # Soft identity check (warn, don't reject) — same posture as enrollment.
     expected_iin = _normalize_iin(
@@ -747,9 +748,10 @@ def public_submit(token):
     actual_iin = _normalize_iin(parsed.signer_iin_or_bin)
     identity_mismatch = bool(expected_iin and actual_iin and expected_iin != actual_iin)
     if identity_mismatch:
+        # Mask PII in logs (KZ Закон 152-V): last 4 digits only.
         current_app.logger.warning(
-            "LMS signature ID mismatch lms=%s party=%s expected=%s signer=%s",
-            lms.id, party, expected_iin, actual_iin,
+            "LMS signature ID mismatch lms=%s party=%s expected=*****%s signer=*****%s",
+            lms.id, party, expected_iin[-4:], actual_iin[-4:],
         )
 
     sig = LmsSignature(

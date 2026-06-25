@@ -1,3 +1,4 @@
+import errno
 import os
 import secrets
 from pathlib import Path
@@ -17,6 +18,10 @@ def _seed_password(env_var: str, dev_default: str, is_debug: bool) -> tuple[str 
     out of the box WITHOUT shipping a publicly-known default admin password, and
     without locking the operator out entirely. The persisted file makes all
     gunicorn workers agree on the same generated value.
+
+    The persist step uses O_CREAT|O_EXCL so concurrent first-boot workers cannot
+    race two different random values into the file (one would land in the DB,
+    the other on disk → operator locked out reading instance/.seed_*).
     """
     value = os.getenv(env_var)
     if value:
@@ -25,16 +30,24 @@ def _seed_password(env_var: str, dev_default: str, is_debug: bool) -> tuple[str 
         return dev_default, False
     pw_file = Path(current_app.instance_path) / f".seed_{env_var.lower()}"
     try:
+        # If a previous boot already persisted a generated password, reuse it.
         if pw_file.exists():
             return pw_file.read_text().strip(), False
-        generated = secrets.token_urlsafe(12)
         pw_file.parent.mkdir(parents=True, exist_ok=True)
-        pw_file.write_text(generated)
+        generated = secrets.token_urlsafe(12)
         try:
-            pw_file.chmod(0o600)
-        except OSError:
-            pass
-        return generated, True
+            # O_EXCL: refuse to overwrite a file written by a parallel worker.
+            fd = os.open(str(pw_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.write(fd, generated.encode("utf-8"))
+            finally:
+                os.close(fd)
+            return generated, True
+        except OSError as exc:
+            if exc.errno == errno.EEXIST:
+                # A parallel worker won the file-create race. Read its value.
+                return pw_file.read_text().strip(), False
+            raise
     except OSError:
         # instance/ not writable — still don't lock the operator out.
         return secrets.token_urlsafe(12), True
@@ -78,18 +91,25 @@ def ensure_seed_data() -> None:
         db.session.rollback()
         created_admin = False
 
-    # Surface generated credentials once, on the worker that actually created the
-    # admin, so the operator can retrieve them from the deploy logs.
+    # Surface ONLY the location of the generated credentials, never the plaintext
+    # password. Application logs are commonly shipped to aggregators (Railway log
+    # panel, Datadog, Sentry, Loki) where the read-access surface is much wider
+    # than the running container's filesystem — logging the cleartext password
+    # there is a real credential exposure (KZ 152-V / general PII hygiene).
     if created_admin and admin_generated:
+        pw_file = Path(current_app.instance_path) / ".seed_admin_password"
         current_app.logger.warning(
-            "\n=== FIRST-BOOT ADMIN CREDENTIALS (set ADMIN_PASSWORD env to control these) ===\n"
+            "\n=== FIRST-BOOT ADMIN ACCOUNT CREATED (set ADMIN_PASSWORD env to control this) ===\n"
             "    email:    %s\n"
-            "    password: %s\n"
-            "=== Log in and change the password; this is shown only on first boot. ===",
-            admin_email, admin_password,
+            "    password: read once from %s, then log in and change it.\n"
+            "=== This message is shown only on first boot. ===",
+            admin_email, pw_file,
         )
 
     try:
         ensure_default_template(current_app.config["TEMPLATES_FOLDER"])
     except Exception as exc:  # noqa: BLE001
+        # Templates are required for contract generation. Log loudly so it shows
+        # up in deploy logs; the readiness probe still passes — operators
+        # discover the issue when they hit /api/health/admin.
         current_app.logger.warning("Default template generation failed: %s", exc)

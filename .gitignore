@@ -3,9 +3,8 @@ backend/.venv/
 backend/__pycache__/
 backend/**/__pycache__/
 backend/*.pyc
-backend/instance/*.db
-backend/instance/.secret_key
-backend/instance/.jwt_secret_key
+backend/instance/*
+!backend/instance/.gitkeep
 backend/archive/
 backend/uploads/
 backend/.env

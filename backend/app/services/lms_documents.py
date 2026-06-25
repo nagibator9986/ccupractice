@@ -52,7 +52,7 @@ from flask import current_app
 from ..extensions import db
 from ..models import ADULT_SIGN_AGE, CollegeSettings, LmsContract, LmsStatus
 from ..utils.files import ensure_dir, safe_filename
-from ..utils.time import utc_now
+from ..utils.time import utc_now, utc_today
 from .document_generator import (
     _MONTHS_RU,
     _convert_to_pdf,
@@ -87,7 +87,7 @@ def _fmt_amount(value) -> str:
 
 def _build_context(lms: LmsContract) -> dict:
     settings = CollegeSettings.query.first()
-    d = lms.contract_date or date.today()
+    d = lms.contract_date or utc_today()
     is_minor = (lms.applicant_age is None) or (lms.applicant_age < ADULT_SIGN_AGE)
 
     addr_parts = [
@@ -172,14 +172,14 @@ _FILENAME_STEM = "Договор_Caspian_Digital"
 
 def _archive_dir(lms: LmsContract) -> Path:
     base = Path(current_app.config["ARCHIVE_FOLDER"]) / "Образовательные услуги"
-    base = base / str(lms.year or (lms.contract_date or date.today()).year)
+    base = base / str(lms.year or (lms.contract_date or utc_today()).year)
     base = base / safe_filename(lms.applicant_full_name or f"lms_{lms.id}")
     return ensure_dir(base)
 
 
 def _filename(lms: LmsContract, ext: str) -> str:
     who = safe_filename(lms.applicant_full_name or f"lms_{lms.id}")
-    year = lms.year or (lms.contract_date or date.today()).year
+    year = lms.year or (lms.contract_date or utc_today()).year
     return f"{_FILENAME_STEM}_{who}_{year}.{ext}"
 
 

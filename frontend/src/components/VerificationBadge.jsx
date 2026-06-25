@@ -28,8 +28,23 @@ const LEVELS = {
   },
 };
 
+const UNKNOWN_LEVEL = {
+  label: "Уровень не определён",
+  cls: "bg-charcoal-100 text-charcoal-600",
+  icon: "❓",
+};
+
 export default function VerificationBadge({ level, className = "" }) {
-  const it = LEVELS[level] || LEVELS.full;
+  // Defensive: on an unknown level NEVER default to the strongest visual
+  // ("Проверено полностью"). The verifier UI is legal-evidence — silently
+  // mislabelling a weaker check as full would be a credibility regression.
+  const known = LEVELS[level];
+  const it = known
+    ? known
+    : { ...UNKNOWN_LEVEL, title: `Неизвестный уровень верификации: ${level || "—"}` };
+  if (import.meta.env.DEV && level && !known) {
+    console.warn("VerificationBadge: unknown verification_level", level);
+  }
   return (
     <span className={`badge ${it.cls} ${className}`} title={it.title}>
       {it.icon} {it.label}

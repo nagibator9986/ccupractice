@@ -26,8 +26,6 @@ from ..models import (
     DOCUMENTS,
     DOCUMENT_LABELS,
     PARTY_LABELS,
-    DOC_CONTRACT,
-    DOC_CONSENT,
     PARTY_PARENT,
 )
 from ..services.enrollment_documents import generate_enrollment_files
@@ -450,13 +448,29 @@ def _party_documents(e: EnrollmentContract, party: str) -> list[str]:
     return e.required_matrix.get(party, [])
 
 
+def _mask_iin_public(value: str | None) -> str:
+    """Mask middle digits of an IIN/BIN — public token surfaces intentionally
+    hide the full identifier (the QR + signer cert already carry the real value
+    where needed). Mirrors the same helper in lms_contracts.py so the public
+    enrollment payload follows the project's documented masking convention."""
+    if not value:
+        return ""
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    if len(digits) < 8:
+        return digits
+    return f"{digits[:6]}****{digits[-2:]}"
+
+
 def _public_summary(e: EnrollmentContract) -> dict:
+    """Token-public summary. The IIN is intentionally masked — the same field
+    on /verify is masked and the parallel LMS public summary masks it; the
+    parent signer legitimately does not need the applicant's full IIN."""
     settings = CollegeSettings.query.first()
     return {
         "number": e.number,
         "date": e.contract_date.isoformat() if e.contract_date else None,
         "applicant_full_name": e.applicant_full_name,
-        "applicant_iin": e.applicant_iin,
+        "applicant_iin_masked": _mask_iin_public(e.applicant_iin),
         "specialty": e.specialty,
         "qualification": e.qualification,
         "tuition_year_amount": e.tuition_year_amount,
@@ -604,9 +618,10 @@ def public_submit(token, document):
     actual_iin = _normalize_iin(parsed.signer_iin_or_bin)
     identity_mismatch = bool(expected_iin and actual_iin and expected_iin != actual_iin)
     if identity_mismatch:
+        # Mask PII in logs (KZ Закон 152-V): last 4 digits only.
         current_app.logger.warning(
-            "Enrollment signature ID mismatch e=%s doc=%s party=%s expected=%s signer=%s",
-            e.id, document, party, expected_iin, actual_iin,
+            "Enrollment signature ID mismatch e=%s doc=%s party=%s expected=*****%s signer=*****%s",
+            e.id, document, party, expected_iin[-4:], actual_iin[-4:],
         )
 
     sig = EnrollmentSignature(

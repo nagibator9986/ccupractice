@@ -214,8 +214,12 @@ export async function signBase64WithNCALayer(payloadBase64, options = {}) {
         return;
       }
       // Log the raw envelope so the exact shape is visible if extraction fails.
-      // eslint-disable-next-line no-console
-      console.log("[NCALayer] response:", data);
+      // Gated to DEV builds so the production bundle doesn't leak the CMS
+      // payload metadata into the browser console.
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.log("[NCALayer] response:", data);
+      }
 
       // Explicit failure / user cancel envelope.
       if (data?.status === false || data?.errorCode || data?.errorMessage || data?.code === "USER_CANCELED") {
@@ -240,8 +244,10 @@ export async function signBase64WithNCALayer(payloadBase64, options = {}) {
       const isFinal =
         data && typeof data === "object" && ("status" in data || "body" in data);
       if (isFinal) {
-        // eslint-disable-next-line no-console
-        console.warn("[NCALayer] final response without extractable CMS:", data);
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.warn("[NCALayer] final response without extractable CMS:", data);
+        }
         return finish(
           reject,
           new Error("NCALayer не вернул CMS-подпись. Ответ NCALayer: " + envelopePreview(data)),

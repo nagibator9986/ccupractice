@@ -41,11 +41,10 @@ export const contractsApi = {
   uploadScan: (id, file) => {
     const form = new FormData();
     form.append("file", file);
-    return client
-      .post(`/contracts/${id}/upload-scan`, form, {
-        headers: { "Content-Type": "multipart/form-data" },
-      })
-      .then((r) => r.data);
+    // Let the browser/axios set Content-Type with the correct multipart
+    // boundary parameter — hardcoding the header strips the boundary, which
+    // some servers/proxies refuse to parse.
+    return client.post(`/contracts/${id}/upload-scan`, form).then((r) => r.data);
   },
   download: async (id, fmt, filename) => {
     const res = await client.get(`/contracts/${id}/download/${fmt}`, {
@@ -86,11 +85,9 @@ export const settingsApi = {
   uploadTemplate: (file) => {
     const form = new FormData();
     form.append("file", file);
-    return client
-      .post("/settings/template", form, {
-        headers: { "Content-Type": "multipart/form-data" },
-      })
-      .then((r) => r.data);
+    // Let the browser/axios set Content-Type so the multipart boundary is
+    // attached automatically.
+    return client.post("/settings/template", form).then((r) => r.data);
   },
   templateInfo: () => client.get("/settings/template/info").then((r) => r.data),
 };

@@ -4,7 +4,7 @@ import toast from "react-hot-toast";
 import BrandLogo from "../components/BrandLogo.jsx";
 import { lmsContractsApi } from "../api/endpoints.js";
 import { pingNCALayer, signBase64WithNCALayer } from "../utils/ncalayer.js";
-import { formatDate } from "../utils/format.js";
+import { formatDate, formatDateTime } from "../utils/format.js";
 
 export default function LmsSignPage() {
   const { token } = useParams();
@@ -203,7 +203,7 @@ export default function LmsSignPage() {
                     <div className="font-medium">{s.signer_full_name}</div>
                     <div className="text-xs text-charcoal-500">{s.signer_party}</div>
                   </div>
-                  <div className="text-xs text-charcoal-500">{formatDate(s.created_at)}</div>
+                  <div className="text-xs text-charcoal-500">{formatDateTime(s.created_at)}</div>
                 </div>
               ))}
             </div>

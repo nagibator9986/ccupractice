@@ -3,7 +3,7 @@ import os
 import secrets
 from datetime import timedelta
 from pathlib import Path
-from flask import Flask, send_from_directory, jsonify, request
+from flask import Flask, send_from_directory, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, jwt_required
 from dotenv import load_dotenv
@@ -38,10 +38,21 @@ def _persistent_secret(name: str, instance_dir: Path) -> str:
     by a missing secret, but the warning nudges toward stable env vars.
     """
     env_val = os.getenv(name)
-    if env_val:
-        return env_val
-
     is_debug = os.getenv("FLASK_DEBUG", "0").strip().lower() in ("1", "true", "yes")
+    if env_val:
+        # Refuse the .env.example placeholders in production: a deployer who
+        # copies .env.example to .env without editing would otherwise sign every
+        # Bearer token with a publicly-known string (forgeable by anyone with
+        # repo read access).
+        placeholder_markers = ("change-me", "change_me", "changeme")
+        normalized = env_val.strip().lower()
+        if not is_debug and any(m in normalized for m in placeholder_markers):
+            raise RuntimeError(
+                f"{name} is set to a placeholder value ({env_val!r}). "
+                f"Generate a strong value (e.g. `python -c 'import secrets;print(secrets.token_urlsafe(48))'`) "
+                f"and set it as an environment variable before deploying."
+            )
+        return env_val
     secret_file = instance_dir / f".{name.lower()}"
     if secret_file.exists():
         return secret_file.read_text().strip()
@@ -220,6 +231,23 @@ def create_app() -> Flask:
 
     @app.get("/api/health")
     def health():
+        # Unauthenticated liveness — do NOT leak filesystem paths or container
+        # topology in the JSON body. Detailed persistence info is for the deploy
+        # log only (see log_persistence_report) and for the JWT-protected admin
+        # endpoint below.
+        report = app.config.get("PERSISTENCE_REPORT")
+        return jsonify(
+            status="ok",
+            service="CCU PRACTICUM",
+            persistent=bool(report and report.persistent),
+        )
+
+    @app.get("/api/admin/health")
+    @jwt_required()
+    def admin_health():
+        # Authenticated diagnostics with the full persistence report (paths,
+        # hints, detail strings). Moved off /api/health and /healthz so an
+        # unauthenticated probe can no longer fingerprint the container layout.
         report = app.config.get("PERSISTENCE_REPORT")
         return jsonify(
             status="ok",
@@ -236,11 +264,10 @@ def create_app() -> Flask:
         if report is not None:
             body["persistent"] = report.persistent
             if not report.persistent:
-                # Surface the actionable hints right in the healthz body so
-                # they show up in Railway's "Recent deploys → View logs"
-                # panel without an SRE having to grep stderr.
+                # Do NOT echo on-disk paths / volume mount points to an
+                # unauthenticated probe. Hints with concrete paths live in the
+                # JWT-protected /api/admin/health and the deploy log.
                 body["persistence_warning"] = "data is on ephemeral storage — will be wiped on next redeploy"
-                body["persistence_hints"] = list(report.hints)
         return jsonify(body)
 
     # Readiness probe — the DB is reachable. Point the platform's readiness
@@ -288,8 +315,15 @@ def create_app() -> Flask:
             # API and reserved prefixes are handled above; everything else
             # serves the SPA's index.html so React Router can take over.
             if path.startswith("api/"):
-                return jsonify(error="Not found"), 404
-            candidate = frontend_dist / path
+                return jsonify(error="Маршрут не найден"), 404
+            # Resolve and assert containment to make path-traversal explicit
+            # (send_from_directory already refuses ".." but a stray normpath
+            # refactor here would silently re-introduce traversal).
+            try:
+                candidate = (frontend_dist / path).resolve()
+                candidate.relative_to(frontend_dist)
+            except (ValueError, OSError):
+                return send_from_directory(str(frontend_dist), "index.html")
             if candidate.is_file():
                 return send_from_directory(str(frontend_dist), path)
             return send_from_directory(str(frontend_dist), "index.html")

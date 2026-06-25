@@ -1,4 +1,24 @@
 import { useEffect, useState } from "react";
+import client from "../api/client.js";
+
+// Safari/Firefox private modes and sandboxed iframes can throw on
+// sessionStorage access — wrap so a thrown DOMException can't crash render.
+const safeSession = {
+  get(key) {
+    try {
+      return typeof window !== "undefined" ? window.sessionStorage.getItem(key) : null;
+    } catch {
+      return null;
+    }
+  },
+  set(key, value) {
+    try {
+      if (typeof window !== "undefined") window.sessionStorage.setItem(key, value);
+    } catch {
+      /* ignore */
+    }
+  },
+};
 
 /**
  * Bright in-app banner shown on every admin page when the backend reports
@@ -14,17 +34,21 @@ import { useEffect, useState } from "react";
 export default function PersistenceBanner({ enabled = true }) {
   const [report, setReport] = useState(null);
   const [dismissed, setDismissed] = useState(
-    () => sessionStorage.getItem("ccu_dismiss_persist") === "1",
+    () => safeSession.get("ccu_dismiss_persist") === "1",
   );
 
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    fetch("/api/health")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (!cancelled && data && data.persistent === false) {
-          setReport(data);
+    // Use the shared axios client so VITE_API_BASE_URL (split-origin deploys)
+    // and the standard request interceptor are honoured. /api/health is
+    // unauthenticated; the shared response interceptor whitelists it
+    // implicitly via the unprotected status path.
+    client
+      .get("/health")
+      .then((res) => {
+        if (!cancelled && res.data && res.data.persistent === false) {
+          setReport(res.data);
         }
       })
       .catch(() => {/* non-fatal */});
@@ -65,7 +89,7 @@ export default function PersistenceBanner({ enabled = true }) {
           type="button"
           className="text-xs text-coral-700 hover:text-coral-900 underline shrink-0 mt-1"
           onClick={() => {
-            sessionStorage.setItem("ccu_dismiss_persist", "1");
+            safeSession.set("ccu_dismiss_persist", "1");
             setDismissed(true);
           }}
         >

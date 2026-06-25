@@ -18,7 +18,7 @@ import secrets
 from datetime import date, datetime, timedelta
 
 from ..extensions import db
-from ..utils.time import utc_now
+from ..utils.time import utc_now, utc_today
 
 
 # Document keys used across signatures, signing requests and downloads.
@@ -166,7 +166,7 @@ class EnrollmentContract(db.Model):
     @property
     def applicant_age(self) -> int | None:
         """Full years at the contract date (falls back to today if no date)."""
-        return _full_years(self.applicant_birth_date, self.contract_date or date.today())
+        return _full_years(self.applicant_birth_date, self.contract_date or utc_today())
 
     @property
     def required_matrix(self) -> dict[str, list[str]]:

@@ -25,7 +25,7 @@ import secrets
 from datetime import date, timedelta
 
 from ..extensions import db
-from ..utils.time import utc_now
+from ..utils.time import utc_now, utc_today
 from .enrollment import (
     ADULT_SIGN_AGE,
     DOC_LMS,
@@ -237,7 +237,7 @@ class LmsContract(db.Model):
     # ── Derived helpers ──────────────────────────────────────────────────────
     @property
     def applicant_age(self) -> int | None:
-        return _full_years(self.applicant_birth_date, self.contract_date or date.today())
+        return _full_years(self.applicant_birth_date, self.contract_date or utc_today())
 
     @property
     def required_matrix(self) -> dict[str, list[str]]:

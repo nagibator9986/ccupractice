@@ -9,6 +9,13 @@ import { formatDate, formatDateTime } from "../utils/format.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { StatusPill } from "./EnrollmentsPage.jsx";
 
+const REQUEST_STATUS_LABELS = {
+  pending: "Ожидает",
+  viewed: "Просмотрено",
+  signed: "Подписано",
+  revoked: "Отозвано",
+};
+
 const EDITABLE = [
   "number", "contract_date",
   "applicant_full_name", "applicant_iin", "applicant_birth_date",
@@ -188,8 +195,8 @@ export default function LmsContractDetailPage() {
     <div>
       <PageHeader
         title={`LMS-договор № ${item.number || "—"}`}
-        subtitle={item.applicant_full_name}
-        right={
+        description={item.applicant_full_name}
+        actions={
           <div className="flex items-center gap-2">
             <StatusPill status={item.status} label={item.status_label} />
             <span className="chip-coral">LMS · только грантники</span>
@@ -350,7 +357,7 @@ export default function LmsContractDetailPage() {
                     <div className="flex items-center justify-between">
                       <div className="font-medium">{r.signer_party_label}</div>
                       <span className={`badge ${r.status === "signed" ? "bg-emerald-100 text-emerald-800" : r.status === "viewed" ? "bg-blue-100 text-blue-800" : r.status === "revoked" ? "bg-charcoal-100 text-charcoal-600" : "bg-amber-100 text-amber-800"}`}>
-                        {r.status}
+                        {REQUEST_STATUS_LABELS[r.status] || r.status}
                       </span>
                     </div>
                     <div className="text-xs text-charcoal-500 mt-1 break-all">

@@ -15,6 +15,7 @@ Public endpoints (token-based, no JWT required):
 from __future__ import annotations
 
 import base64
+from datetime import timedelta
 from pathlib import Path
 
 from flask import Blueprint, current_app, jsonify, request, send_from_directory
@@ -173,7 +174,6 @@ def resend(rid: int):
     sr.revoked_at = None
     # Reset expiration so the resent link has a full TTL window (single source
     # of truth: SigningRequest.DEFAULT_TTL_DAYS).
-    from datetime import timedelta
     sr.expires_at = utc_now() + timedelta(days=SigningRequest.DEFAULT_TTL_DAYS)
     db.session.commit()
     return jsonify(item=sr.to_dict(include_token=True, public_base_url=_public_base()))
@@ -187,7 +187,24 @@ def _get_request(token: str) -> SigningRequest | None:
     return SigningRequest.query.filter_by(token=token).first()
 
 
+def _mask_iin_public(value: str | None) -> str:
+    """Mask middle digits of an IIN/BIN — public token surfaces hide the full
+    identifier (the QR + signer cert already carry the real value where needed).
+    Mirrors the helper in lms_contracts.py / enrollment.py."""
+    if not value:
+        return ""
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    if len(digits) < 8:
+        return digits
+    return f"{digits[:6]}****{digits[-2:]}"
+
+
 def _public_contract_payload(contract: Contract) -> dict:
+    """Token-public payload. The student IIN and partner BIN are masked here
+    because the public token surface lands in email/SMS history, browser
+    Referer headers, and access logs — anyone with the link otherwise gets a
+    raw national identifier in cleartext. The signer can still see their own
+    identity through the cert returned by NCALayer."""
     settings = CollegeSettings.query.first()
     partner = contract.partner
     student = contract.student
@@ -203,14 +220,14 @@ def _public_contract_payload(contract: Contract) -> dict:
         },
         "partner": {
             "name": partner.organization_name if partner else "",
-            "bin": partner.bin if partner else "",
+            "bin_masked": _mask_iin_public(partner.bin) if partner else "",
             "director_full_name": partner.director_full_name if partner else "",
             "director_position": partner.director_position if partner else "",
             "legal_address": partner.legal_address if partner else "",
         },
         "student": {
             "full_name": student.full_name if student else "",
-            "iin": student.iin if student else "",
+            "iin_masked": _mask_iin_public(student.iin) if student else "",
             "group_name": student.group_name if student else "",
             "specialty": student.specialty if student else "",
             "practice_start": student.practice_start.isoformat() if student and student.practice_start else None,
@@ -269,7 +286,9 @@ def public_view(token: str):
             "signer_role": sr.signer_role,
             "signer_role_label": ROLE_LABELS[sr.signer_role],
             "recipient_name": sr.recipient_name,
-            "recipient_iin_or_bin": sr.recipient_iin_or_bin,
+            # recipient_iin_or_bin intentionally NOT returned — public token
+            # surfaces land in email/SMS history, Referer headers and access
+            # logs; the enrollment + LMS public flows already withhold it.
             "status": sr.status,
             "expires_at": sr.expires_at.isoformat() if sr.expires_at else None,
         },
@@ -395,9 +414,12 @@ def public_submit(token: str):
         expected and actual and expected != actual and sr.signer_role != "college"
     )
     if identity_mismatch:
+        # Mask PII in logs (KZ Закон 152-V "О персональных данных"): retain only
+        # the last 4 digits so a mismatch can still be triaged without writing
+        # full national IDs into log aggregators / Railway logs panel.
         current_app.logger.warning(
-            "Signature ID mismatch on contract %s role=%s: expected=%s signer=%s",
-            contract.id, sr.signer_role, expected, actual,
+            "Signature ID mismatch on contract %s role=%s: expected=*****%s signer=*****%s",
+            contract.id, sr.signer_role, expected[-4:], actual[-4:],
         )
 
     sig = Signature(

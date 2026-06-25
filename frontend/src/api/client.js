@@ -5,13 +5,34 @@ import axios from "axios";
 // at build time (e.g. `https://api.ccu.example.com`).
 const baseURL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "") + "/api";
 
+// Safe-storage shim: Safari/Firefox private modes, sandboxed iframes and
+// browsers with site-data blocked can throw on localStorage access. Wrap every
+// access so a thrown DOMException can't reject every API request before it
+// leaves the page.
+const safeStorage = {
+  get(key) {
+    try {
+      return typeof window !== "undefined" ? window.localStorage.getItem(key) : null;
+    } catch {
+      return null;
+    }
+  },
+  remove(key) {
+    try {
+      if (typeof window !== "undefined") window.localStorage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+  },
+};
+
 const client = axios.create({
   baseURL,
   timeout: 60_000,
 });
 
 client.interceptors.request.use((config) => {
-  const token = localStorage.getItem("ccu_token");
+  const token = safeStorage.get("ccu_token");
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -33,13 +54,24 @@ client.interceptors.response.use(
     const status = error.response?.status;
     const url = error.config?.url || "";
     const isPublic = PUBLIC_PATHS.some((p) => url.includes(p));
-    // Treat 401 (and 422 from misconfigured JWT setups) on protected routes
-    // as a session-expired signal — clear creds and bounce to /login.
-    if (!isPublic && (status === 401 || status === 422)) {
-      const wasLoggedIn = !!localStorage.getItem("ccu_token");
-      localStorage.removeItem("ccu_token");
-      localStorage.removeItem("ccu_user");
-      if (wasLoggedIn && !window.location.pathname.endsWith("/login")) {
+    // Narrowed to 401 only: a generic 422 from Flask validation, marshmallow,
+    // or any other code path should NOT silently log the admin out and hide
+    // the original error. Only an explicit JWT-expired/invalid 401 logs out.
+    const isJwt401 = status === 401;
+    // Some Flask-JWT configs return 422 with a code like "token_expired" /
+    // "token_invalid" — honour those as session-expired too, but never an
+    // unrelated 422.
+    const code = error.response?.data?.code;
+    const isJwt422 =
+      status === 422 && typeof code === "string" && /token_/.test(code);
+    if (!isPublic && (isJwt401 || isJwt422)) {
+      const wasLoggedIn = !!safeStorage.get("ccu_token");
+      safeStorage.remove("ccu_token");
+      safeStorage.remove("ccu_user");
+      // Don't yank a foreground tab from a background poll that died.
+      const docVisible =
+        typeof document === "undefined" || document.visibilityState === "visible";
+      if (wasLoggedIn && docVisible && !window.location.pathname.endsWith("/login")) {
         window.location.replace("/login");
       }
     }

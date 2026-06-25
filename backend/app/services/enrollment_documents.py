@@ -15,6 +15,7 @@ from ..models import (
     ADULT_SIGN_AGE,
 )
 from ..utils.files import safe_filename, ensure_dir
+from ..utils.time import utc_today
 from .document_generator import _convert_to_pdf, _MONTHS_RU
 from .enrollment_template_builder import ensure_enrollment_templates
 
@@ -34,7 +35,7 @@ def _fmt_amount(value) -> str:
 
 def _build_context(e: EnrollmentContract) -> dict:
     settings = CollegeSettings.query.first()
-    d = e.contract_date or date.today()
+    d = e.contract_date or utc_today()
     # Drives the age-aware consent/contract wording. Unknown age → treat as minor
     # (safe: invite() already blocks until a birth date exists, so a real signed
     # document always has a known age).
@@ -103,7 +104,7 @@ def _build_context(e: EnrollmentContract) -> dict:
 
 def _archive_dir(e: EnrollmentContract) -> Path:
     base = Path(current_app.config["ARCHIVE_FOLDER"]) / "Образовательные услуги"
-    base = base / str(e.year or (e.contract_date or date.today()).year)
+    base = base / str(e.year or (e.contract_date or utc_today()).year)
     base = base / safe_filename(e.applicant_full_name or f"enroll_{e.id}")
     return ensure_dir(base)
 
@@ -116,7 +117,7 @@ _STEMS = {
 
 def _filename(e: EnrollmentContract, document: str, ext: str) -> str:
     who = safe_filename(e.applicant_full_name or f"enroll_{e.id}")
-    year = e.year or (e.contract_date or date.today()).year
+    year = e.year or (e.contract_date or utc_today()).year
     stem = _STEMS.get(document, document)
     return f"{stem}_{who}_{year}.{ext}"
 

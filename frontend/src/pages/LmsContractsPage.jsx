@@ -86,8 +86,8 @@ export default function LmsContractsPage() {
     <div>
       <PageHeader
         title="LMS-договоры"
-        subtitle="Договоры о подключении к цифровой экосистеме Caspian Digital"
-        right={
+        description="Договоры о подключении к цифровой экосистеме Caspian Digital"
+        actions={
           <span className="chip-coral">Только грантники (госзаказ)</span>
         }
       />

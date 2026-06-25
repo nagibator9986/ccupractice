@@ -116,18 +116,25 @@ export default function VerifyPage() {
       <section className="card p-6 mb-5">
         <h2 className="section-title mb-4">🖋️ Список подписей</h2>
         <ul className="space-y-3">
-          {["college", "partner", "student"].map((role) => {
-            const sig = signatures.find((s) => s.signer_role === role);
+          {(summary.required_roles || summary.required_parties || []).map((role, idx) => {
+            const sig = signatures.find((s) => s.signer_role === role || s.signer_party === role);
+            // LMS facsimile rows arrive with verification_level=null. Treat
+            // them as "facsimile/accepted" rather than a green crypto badge —
+            // a legal-verifier page must never claim a stronger assurance than
+            // the backend actually attested.
+            const level = sig?.verification_level;
+            const levelInfo = level ? LEVEL_BADGE[level] : null;
             return (
               <li key={role} className={`rounded-xl border p-4 ${sig ? "border-emerald-200 bg-emerald-50/40" : "border-charcoal-100"}`}>
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                   <div className="font-semibold text-charcoal-800">
-                    Подпись {role === "college" ? "№1 " : role === "partner" ? "№2 " : "№3 "}
-                    <span className="text-charcoal-500 font-normal text-sm">— {ROLE_LABELS[role]}</span>
+                    Подпись №{idx + 1}{" "}
+                    <span className="text-charcoal-500 font-normal text-sm">— {ROLE_LABELS[role] || role}</span>
                   </div>
                   {sig ? (
-                    <span className={`badge ${LEVEL_BADGE[sig.verification_level]?.cls || "bg-emerald-100 text-emerald-700"}`}>
-                      {LEVEL_BADGE[sig.verification_level]?.label || "Подписано"}
+                    <span className={`badge ${levelInfo?.cls || "bg-charcoal-100 text-charcoal-600"}`}
+                          title={level ? "" : "Уровень верификации не указан"}>
+                      {levelInfo?.label || "Подписано (без указания уровня)"}
                     </span>
                   ) : (
                     <span className="badge bg-charcoal-100 text-charcoal-600">Не подписано</span>
@@ -139,12 +146,14 @@ export default function VerifyPage() {
                     <div><span className="text-charcoal-400">ИИН / БИН: </span>{sig.signer_iin_or_bin_masked || "—"}</div>
                     <div><span className="text-charcoal-400">Серийный № сертификата: </span><span className="font-mono">…{sig.signer_serial_tail || "—"}</span></div>
                     <div><span className="text-charcoal-400">Время подписания: </span>{formatDateTime(sig.created_at)}</div>
-                    <div className="md:col-span-2 break-all font-mono text-[11px] text-charcoal-500">
-                      SHA-256: {sig.signed_payload_sha256}
-                    </div>
+                    {sig.signed_payload_sha256 && (
+                      <div className="md:col-span-2 break-all font-mono text-[11px] text-charcoal-500">
+                        SHA-256: {sig.signed_payload_sha256}
+                      </div>
+                    )}
                   </div>
                 ) : (
-                  <div className="text-xs text-charcoal-500">Ожидается ЭЦП от роли «{ROLE_LABELS[role]}».</div>
+                  <div className="text-xs text-charcoal-500">Ожидается ЭЦП от роли «{ROLE_LABELS[role] || role}».</div>
                 )}
               </li>
             );
@@ -179,7 +188,7 @@ export default function VerifyPage() {
 
       <footer className="text-center text-xs text-charcoal-400 mt-10 flex flex-col items-center gap-2 pb-10">
         <img src="/ccu-logo.png" alt="" className="h-10 w-10 opacity-60" />
-        © {new Date().getFullYear()} College of Caspian University · CCU PRACTICUM
+        © {new Date().getFullYear()} Колледж УО «Каспийский общественный университет» · CCU PRACTICUM
         <span>
           Документ согласно п. 1 ст. 7 ЗРК от 7 января 2003 года № 370-II «Об электронном документе и электронной цифровой подписи»
           равнозначен документу на бумажном носителе при наличии действительных ЭЦП всех сторон.

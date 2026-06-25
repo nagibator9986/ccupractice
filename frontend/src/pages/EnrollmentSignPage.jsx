@@ -105,7 +105,7 @@ export default function EnrollmentSignPage() {
               <Info label="Номер договора" value={en.number} />
               <Info label="Дата" value={formatDate(en.date)} />
               <Info label="Абитуриент" value={en.applicant_full_name} />
-              <Info label="ИИН" value={en.applicant_iin} />
+              <Info label="ИИН" value={en.applicant_iin_masked} hint="скрыто частично" />
               <Info label="Специальность" value={en.specialty} />
               <Info label="Квалификация" value={en.qualification} />
               <Info label="Стоимость за год" value={en.tuition_year_amount ? `${en.tuition_year_amount.toLocaleString("ru-RU")} ₸` : null} />

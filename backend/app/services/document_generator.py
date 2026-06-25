@@ -13,12 +13,13 @@ from docx.enum.table import WD_ALIGN_VERTICAL
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
-from docx.shared import Cm, Mm, Pt, RGBColor
+from docx.shared import Cm, Pt, RGBColor
 from docxtpl import DocxTemplate
 from flask import current_app
 
 from ..models import Contract, CollegeSettings, Partner, Student
 from ..utils.files import safe_filename, ensure_dir
+from ..utils.time import utc_today
 from .qr import generate_qr_png, public_verify_url
 
 
@@ -43,7 +44,7 @@ def _build_context(contract: Contract) -> dict:
     partner: Partner = contract.partner
     student: Student = contract.student
 
-    d = contract.contract_date or date.today()
+    d = contract.contract_date or utc_today()
     return {
         "contract": {
             "number": contract.number,
