@@ -177,6 +177,15 @@ export default function EnrollmentDetailPage() {
     }
   }
 
+  async function downloadCertificate() {
+    try {
+      await enrollmentsApi.downloadCertificate(id, item.number);
+      toast.success("Сертификат подписания скачан");
+    } catch (e) {
+      toast.error(e.response?.data?.error || "Не удалось сформировать сертификат");
+    }
+  }
+
   if (error) return <div className="card p-8 text-center text-charcoal-500">{error}</div>;
   if (!item || !form) return <div className="text-charcoal-500">Загрузка…</div>;
 
@@ -194,6 +203,15 @@ export default function EnrollmentDetailPage() {
           <div className="flex flex-wrap gap-2">
             {isAdmin && <button className="btn-primary" onClick={save} disabled={busy}>Сохранить</button>}
             {isAdmin && <button className="btn-secondary" onClick={() => generate()} disabled={busy}>Сформировать документы</button>}
+            {(item.signatures_count > 0) && (
+              <button
+                className="btn-secondary"
+                onClick={downloadCertificate}
+                title="Скачать PDF со списком подписантов и QR-кодом для проверки. Не модифицирует подписанные документы."
+              >
+                📑 Сертификат подписания
+              </button>
+            )}
             {isAdmin && <button className="btn-ghost text-red-600" onClick={remove} disabled={busy}>Удалить</button>}
           </div>
         }

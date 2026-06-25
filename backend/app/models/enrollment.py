@@ -105,6 +105,18 @@ class EnrollmentContract(db.Model):
     contract_date = db.Column(db.Date)
     year = db.Column(db.Integer, index=True)
 
+    # Stable, URL-safe code used to address this enrollment on the public
+    # /verify/<code> page (printed in QR stamp on every generated DOCX/PDF and
+    # on the on-demand "Сертификат подписания" PDF). The code is NEVER rotated
+    # after creation — printed QRs keep working across regenerations.
+    verification_code = db.Column(
+        db.String(24),
+        unique=True,
+        index=True,
+        nullable=False,
+        default=lambda: __import__("secrets").token_urlsafe(12),
+    )
+
     # ── Applicant (Обучающийся) ──────────────────────────────────────────────
     applicant_full_name = db.Column(db.String(200), nullable=False, index=True)
     applicant_iin = db.Column(db.String(20), index=True)
@@ -199,6 +211,7 @@ class EnrollmentContract(db.Model):
         data = {
             "id": self.id,
             "number": self.number,
+            "verification_code": self.verification_code,
             "contract_date": self.contract_date.isoformat() if self.contract_date else None,
             "year": self.year,
             "applicant_full_name": self.applicant_full_name,

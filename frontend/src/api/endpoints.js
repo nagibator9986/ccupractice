@@ -136,6 +136,15 @@ export const enrollmentsApi = {
   remove: (id) => client.delete(`/enrollments/${id}`).then((r) => r.data),
   downloadDoc: (id, document, fmt, filename) =>
     blobDownload(`/enrollments/${id}/download/${document}/${fmt}`, filename),
+  // "Сертификат подписания" — side-channel PDF that lists who signed, with QR
+  // pointing at /verify/<code>. SAFETY: the endpoint never mutates the signed
+  // bytes, so it can be downloaded any number of times without invalidating
+  // any existing signature.
+  downloadCertificate: (id, number) =>
+    blobDownload(
+      `/enrollments/${id}/certificate`,
+      `Сертификат_подписания_${number || id}.pdf`,
+    ),
   invite: (id, payload) =>
     client.post(`/enrollments/${id}/invite`, payload || {}).then((r) => r.data),
   listRequests: (id) =>

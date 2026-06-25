@@ -17,6 +17,8 @@ from ..models import (
     ContractStatus,
     DOC_LMS,
     DOCUMENT_LABELS,
+    EnrollmentContract,
+    EnrollmentStatus,
     LmsContract,
     LmsStatus,
     PARTY_LABELS,
@@ -208,16 +210,131 @@ def _verify_lms(code: str, lms: LmsContract):
     )
 
 
+def _enrollment_current_file_hash(e: EnrollmentContract, document: str) -> str | None:
+    rel = e.doc_path(document, "docx")
+    if not rel:
+        return None
+    p = Path(current_app.config["ARCHIVE_FOLDER"]) / rel
+    if not p.is_file():
+        return None
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def _enrollment_signature_dto(s) -> dict:
+    return {
+        "document": s.document,
+        "document_label": DOCUMENT_LABELS.get(s.document, s.document),
+        "signer_role": s.signer_party,
+        "signer_role_label": PARTY_LABELS.get(s.signer_party, s.signer_party),
+        "signer_party": s.signer_party,
+        "signer_party_label": PARTY_LABELS.get(s.signer_party, s.signer_party),
+        "signer_full_name": s.signer_full_name or "—",
+        "signer_iin_or_bin_masked": _mask_iin(s.signer_iin_or_bin),
+        "signer_serial_tail": _serial_tail(s.signer_serial),
+        "signed_payload_sha256": s.signed_payload_sha256,
+        "verification_level": getattr(s, "verification_level", "full"),
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+    }
+
+
+def _verify_enrollment(code: str, e: EnrollmentContract):
+    """Render the verification payload for an EnrollmentContract.
+
+    Enrollment is a two-document aggregate (contract + consent), each with its
+    own signer matrix. Surface ONE row per (document, party) so a verifier can
+    see who signed what.
+    """
+    sigs = list(e.signatures or [])
+    required = e.required_matrix or {}
+    # signed = set of (document, party) tuples
+    signed_tuples = {(s.document, s.signer_party) for s in sigs}
+    required_tuples = {(doc, party) for party, docs in required.items() for doc in docs}
+    fully_signed = bool(required_tuples) and required_tuples.issubset(signed_tuples)
+
+    # A "first" hash for the integrity panel — every signer signs the same
+    # document bytes for that document, so we pick the contract signature if
+    # available; if not, any signature; if none, None.
+    contract_sigs = [s for s in sigs if s.document == "contract"]
+    candidate_sig = contract_sigs[0] if contract_sigs else (sigs[0] if sigs else None)
+    signed_hash = candidate_sig.signed_payload_sha256 if candidate_sig else None
+
+    # Compute current-file hash for the SAME document the signed_hash came from.
+    if candidate_sig:
+        current_hash = _enrollment_current_file_hash(e, candidate_sig.document)
+    else:
+        current_hash = None
+    integrity_ok = (
+        signed_hash is not None
+        and current_hash is not None
+        and signed_hash == current_hash
+    )
+
+    parties_required = sorted({p for p in required.keys()})
+    parties_signed = sorted({s.signer_party for s in sigs})
+    parties_missing = sorted(set(parties_required) - set(parties_signed))
+
+    return jsonify(
+        kind="enrollment",
+        contract={
+            "kind": "enrollment",
+            "aggregate": "enrollment",
+            "number": e.number,
+            "verification_code": e.verification_code,
+            "year": e.year,
+            "contract_date": e.contract_date.isoformat() if e.contract_date else None,
+            "status": e.status,
+            "status_label": EnrollmentStatus.LABELS.get(e.status, e.status),
+            "applicant_full_name": e.applicant_full_name,
+            "applicant_iin_masked": _mask_iin(e.applicant_iin),
+            "specialty": e.specialty,
+            "qualification": e.qualification,
+            "education_base": e.education_base,
+            "study_form": e.study_form,
+        },
+        signatures=[_enrollment_signature_dto(s) for s in sorted(sigs, key=lambda x: x.created_at or 0)],
+        summary={
+            "required_parties": parties_required,
+            "signed_parties": parties_signed,
+            "missing_parties": parties_missing,
+            "required_roles": parties_required,
+            "signed_roles": parties_signed,
+            "missing_roles": parties_missing,
+            "fully_signed": fully_signed,
+            "signed_count": len(parties_signed),
+            "required_count": len(parties_required),
+        },
+        integrity={
+            "signed_payload_sha256": signed_hash,
+            "current_file_sha256": current_hash,
+            "match": integrity_ok,
+            "available": signed_hash is not None and current_hash is not None,
+        },
+        download={
+            # Enrollment has TWO documents; expose both. Frontend can render
+            # whichever fields are non-null. The verify file endpoint accepts
+            # the standard format; for enrollment we encode the document key
+            # into the format slot (docx-contract / docx-consent / pdf-* ).
+            "docx": f"/api/verify/{code}/file/docx" if e.contract_docx_path else None,
+            "pdf": f"/api/verify/{code}/file/pdf" if e.contract_pdf_path else None,
+            "consent_docx": f"/api/verify/{code}/file/docx-consent" if e.consent_docx_path else None,
+            "consent_pdf": f"/api/verify/{code}/file/pdf-consent" if e.consent_pdf_path else None,
+        },
+    )
+
+
 @bp.get("/<string:code>")
 def public_verify(code: str):
     contract: Contract | None = Contract.query.filter_by(verification_code=code).first()
     if not contract:
-        # Try the LMS aggregate before giving up — verify codes are minted
-        # independently across both, so the SPA hits ONE endpoint and we
-        # resolve internally.
+        # Verify codes are minted independently across all three aggregates
+        # (practicum, LMS, enrollment) — the SPA hits ONE endpoint and we
+        # resolve internally. Try LMS, then enrollment.
         lms = LmsContract.query.filter_by(verify_code=code).first()
         if lms:
             return _verify_lms(code, lms)
+        enr = EnrollmentContract.query.filter_by(verification_code=code).first()
+        if enr:
+            return _verify_enrollment(code, enr)
         return jsonify(error="Документ не найден", code="not_found"), 404
 
     sigs = list(contract.signatures or [])
@@ -290,23 +407,41 @@ def public_verify(code: str):
 
 @bp.get("/<string:code>/file/<string:fmt>")
 def public_verify_file(code: str, fmt: str):
-    contract: Contract | None = Contract.query.filter_by(verification_code=code).first()
+    """Public file download — resolves the verify code across all three aggregates.
+
+    Enrollment has TWO documents per row (contract + consent); the consent is
+    addressed via `docx-consent` / `pdf-consent` in the `fmt` slot. Bare
+    `docx` / `pdf` give the main contract document. Practicum and LMS are
+    single-document aggregates and only honour `docx` / `pdf`.
+    """
     rel: str | None = None
+    contract: Contract | None = Contract.query.filter_by(verification_code=code).first()
     if contract:
         if fmt == "docx":
             rel = contract.docx_path
         elif fmt == "pdf":
             rel = contract.pdf_path
     else:
-        # Fall back to the LMS aggregate — verify codes are minted independently
-        # across both, so we resolve internally and the SPA hits ONE endpoint.
         lms = LmsContract.query.filter_by(verify_code=code).first()
-        if not lms:
-            return jsonify(error="Документ не найден"), 404
-        if fmt == "docx":
-            rel = lms.docx_path
-        elif fmt == "pdf":
-            rel = lms.pdf_path
+        if lms:
+            if fmt == "docx":
+                rel = lms.docx_path
+            elif fmt == "pdf":
+                rel = lms.pdf_path
+        else:
+            enr = EnrollmentContract.query.filter_by(verification_code=code).first()
+            if not enr:
+                return jsonify(error="Документ не найден"), 404
+            # Map fmt → (document, ext)
+            mapping = {
+                "docx":         ("contract", "docx"),
+                "pdf":          ("contract", "pdf"),
+                "docx-consent": ("consent",  "docx"),
+                "pdf-consent":  ("consent",  "pdf"),
+            }
+            if fmt in mapping:
+                doc_key, ext = mapping[fmt]
+                rel = enr.doc_path(doc_key, ext)
     if not rel:
         return jsonify(error="Файл недоступен"), 404
     return send_from_directory(

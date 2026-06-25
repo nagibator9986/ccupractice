@@ -16,8 +16,16 @@ from ..models import (
 )
 from ..utils.files import safe_filename, ensure_dir
 from ..utils.time import utc_today
-from .document_generator import _convert_to_pdf, _MONTHS_RU
+from .document_generator import _convert_to_pdf, _MONTHS_RU, apply_verification_stamp
 from .enrollment_template_builder import ensure_enrollment_templates
+from .qr import public_verify_url
+
+
+# Maps DOC_CONTRACT/DOC_CONSENT → readable suffix for the footer brand line.
+_DOC_LABELS = {
+    "contract": "договор об оказании образовательных услуг",
+    "consent": "согласие на обработку персональных данных",
+}
 
 
 def _fmt_date(value: date | None) -> str:
@@ -132,7 +140,8 @@ def _unlink_quietly(path: Path, label: str) -> None:
 
 def _render_one(e: EnrollmentContract, document: str, template_path: Path,
                 context: dict, archive_dir: Path,
-                written: list[Path] | None = None) -> None:
+                written: list[Path] | None = None,
+                public_base: str | None = None) -> None:
     archive_root = current_app.config["ARCHIVE_FOLDER"]
 
     # Capture the previously-recorded files BEFORE we overwrite the DB paths.
@@ -155,6 +164,28 @@ def _render_one(e: EnrollmentContract, document: str, template_path: Path,
     tpl.save(str(docx_full))
     if written is not None:
         written.append(docx_full)
+
+    # Embed verification stamp (per-page footer band + final "Список подписей"
+    # block with QR linking to /verify/<code>) BEFORE any signature is captured.
+    # The bytes that get signed therefore already include the stamp, so a signer
+    # sees exactly what they sign — and a printed copy always carries the QR for
+    # later verification. Errors logged but non-fatal: an unstamped DOCX is
+    # still legally valid; the QR is a convenience.
+    if e.verification_code:
+        verify_url = public_verify_url(e.verification_code, base_url=public_base)
+        try:
+            brand_doc_suffix = _DOC_LABELS.get(document, document)
+            apply_verification_stamp(
+                docx_full,
+                brand_line=f"CCU PRACTICUM · {brand_doc_suffix} № {e.number or '—'}",
+                verification_code=e.verification_code,
+                verify_url=verify_url,
+            )
+        except Exception:
+            current_app.logger.exception(
+                "Verification stamp embedding failed for enrollment %s doc=%s",
+                e.id, document,
+            )
 
     setattr(e, f"{document}_docx_path", str(docx_full.relative_to(archive_root)))
 
@@ -182,7 +213,23 @@ def _render_one(e: EnrollmentContract, document: str, template_path: Path,
         setattr(e, f"{document}_pdf_path", str(produced.relative_to(archive_root)))
 
 
-def generate_enrollment_files(e: EnrollmentContract) -> EnrollmentContract:
+def generate_enrollment_files(
+    e: EnrollmentContract,
+    *,
+    public_base: str | None = None,
+) -> EnrollmentContract:
+    """Render the enrollment DOCX/PDF pair (contract + consent).
+
+    ``public_base`` is the absolute origin embedded into the QR-stamp URL —
+    typically the request's ``X-Public-Origin`` header. Falls back to
+    ``PUBLIC_BASE_URL`` env, else relative ``/verify/<code>``.
+
+    SAFETY: this function rewrites the DOCX bytes that get signed. Existing
+    signatures on this enrollment WOULD be invalidated by a regeneration. The
+    API layer guards against accidental loss by requiring ``force=true`` on
+    /generate when any signature row exists; the user always sees a confirm
+    dialog before any signature would be sacrificed.
+    """
     templates = ensure_enrollment_templates(current_app.config["TEMPLATES_FOLDER"])
     context = _build_context(e)
     archive_dir = _archive_dir(e)
@@ -197,8 +244,10 @@ def generate_enrollment_files(e: EnrollmentContract) -> EnrollmentContract:
     # re-raising, so the archive cannot end up half-generated.
     written: list[Path] = []
     try:
-        _render_one(e, DOC_CONTRACT, templates["contract"], context, archive_dir, written)
-        _render_one(e, DOC_CONSENT, templates["consent"], context, archive_dir, written)
+        _render_one(e, DOC_CONTRACT, templates["contract"], context, archive_dir,
+                    written, public_base=public_base)
+        _render_one(e, DOC_CONSENT, templates["consent"], context, archive_dir,
+                    written, public_base=public_base)
     except Exception:
         for path in written:
             _unlink_quietly(path, "partially-generated enrollment file")

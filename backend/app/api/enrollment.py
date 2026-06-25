@@ -264,7 +264,13 @@ def generate(eid):
         e.status = EnrollmentStatus.DRAFT
 
     try:
-        generate_enrollment_files(e)
+        import os
+        public_base = (
+            request.headers.get("X-Public-Origin")
+            or os.getenv("PUBLIC_BASE_URL")
+            or None
+        )
+        generate_enrollment_files(e, public_base=public_base)
     except Exception as exc:  # noqa: BLE001
         current_app.logger.exception("Enrollment generation failed: %s", exc)
         db.session.rollback()
@@ -285,6 +291,33 @@ def download(eid, document, fmt):
     if not rel:
         return jsonify(error="Файл не найден"), 404
     return send_from_directory(current_app.config["ARCHIVE_FOLDER"], rel, as_attachment=True)
+
+
+@bp.get("/<int:eid>/certificate")
+@jwt_required()
+def download_signature_certificate(eid):
+    """Generate + return the "Сертификат подписания" PDF for this enrollment.
+
+    SAFETY: This endpoint does NOT modify the enrollment row, the signed DOCX
+    bytes, or any EnrollmentSignature row. It produces a SIDE-CHANNEL PDF that
+    lists who signed (party, masked IIN, time, verification level) and embeds
+    the same QR code that links to the public /verify/<code> page. Regenerating
+    is idempotent and safe for already-signed enrollments — the original
+    signatures stay intact because nothing they were bound to has changed.
+    """
+    from ..services.enrollment_certificate import generate_signature_certificate
+    e = EnrollmentContract.query.get_or_404(eid)
+    public_base = request.headers.get("X-Public-Origin") or None
+    try:
+        docx_path, pdf_path = generate_signature_certificate(e, public_base=public_base)
+    except Exception as exc:  # noqa: BLE001
+        current_app.logger.exception("Certificate generation failed: %s", exc)
+        return jsonify(error=f"Не удалось сформировать сертификат: {exc}"), 500
+    # Prefer PDF if LibreOffice produced one; fall back to DOCX otherwise.
+    final = pdf_path or docx_path
+    archive_root = current_app.config["ARCHIVE_FOLDER"]
+    rel = str(final.relative_to(archive_root))
+    return send_from_directory(archive_root, rel, as_attachment=True)
 
 
 @bp.delete("/<int:eid>")
