@@ -250,6 +250,14 @@ class EnrollmentContract(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+        # Expose the first linked LmsContract (if any) so the SPA can render a
+        # deep-link chip 'LMS-договор № … →' on the enrollment detail page.
+        # The relationship is set via lms_contracts.source_enrollment_id (see
+        # models/lms_contract.py — backref('lms_contracts')).
+        lms_rows = getattr(self, "lms_contracts", None) or []
+        first_lms = lms_rows[0] if lms_rows else None
+        data["source_lms_contract_id"] = first_lms.id if first_lms else None
+        data["source_lms_contract_number"] = first_lms.number if first_lms else None
         if include_relations:
             data["signatures"] = [s.to_dict() for s in (self.signatures or [])]
             data["signing_requests"] = [r.to_dict() for r in (self.signing_requests or [])]

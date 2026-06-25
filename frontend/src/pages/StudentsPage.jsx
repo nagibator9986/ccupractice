@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import PageHeader from "../components/PageHeader.jsx";
 import Modal from "../components/Modal.jsx";
@@ -35,11 +36,46 @@ const EMPTY = {
 
 export default function StudentsPage() {
   const { isAdmin } = useAuth();
+  const navigate = useNavigate();
   const [items, setItems] = useState([]);
   const [partners, setPartners] = useState([]);
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [grantBusy, setGrantBusy] = useState(null);
+
+  async function onToggleGrant(s) {
+    if (grantBusy === s.id) return;
+    const next = !s.is_grant_student;
+    // Optimistic update.
+    setGrantBusy(s.id);
+    setItems((prev) =>
+      prev.map((row) => (row.id === s.id ? { ...row, is_grant_student: next } : row))
+    );
+    try {
+      await studentsApi.setGrant(s.id, next);
+      toast.success(
+        next ? "Студент переведён в грантники" : "Снята отметка о гранте"
+      );
+    } catch (e) {
+      // Rollback.
+      setItems((prev) =>
+        prev.map((row) => (row.id === s.id ? { ...row, is_grant_student: !next } : row))
+      );
+      const status = e.response?.status;
+      if (status === 409) {
+        toast.error("Нельзя снять отметку: есть активный LMS-договор");
+      } else {
+        toast.error(e.response?.data?.error || "Не удалось обновить отметку о гранте");
+      }
+    } finally {
+      setGrantBusy(null);
+    }
+  }
+
+  function onQuickCreateLms(s) {
+    navigate(`/lms-contracts?create=${s.id}`);
+  }
 
   async function load() {
     setLoading(true);
@@ -155,14 +191,15 @@ export default function StudentsPage() {
               <th>Курс</th>
               <th>Период практики</th>
               <th>Партнёр</th>
+              <th>На гранте</th>
               {isAdmin && <th className="text-right">Действия</th>}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={isAdmin ? 8 : 7} className="text-center py-6 text-slate-500">Загрузка…</td></tr>
+              <tr><td colSpan={isAdmin ? 9 : 8} className="text-center py-6 text-slate-500">Загрузка…</td></tr>
             ) : items.length === 0 ? (
-              <tr><td colSpan={isAdmin ? 8 : 7} className="text-center py-6 text-slate-500">Студентов пока нет.</td></tr>
+              <tr><td colSpan={isAdmin ? 9 : 8} className="text-center py-6 text-slate-500">Студентов пока нет.</td></tr>
             ) : (
               items.map((s) => (
                 <tr key={s.id}>
@@ -175,8 +212,46 @@ export default function StudentsPage() {
                     {s.practice_start ? `${s.practice_start} → ${s.practice_end || "?"}` : "—"}
                   </td>
                   <td>{s.partner_name || "—"}</td>
+                  <td>
+                    {isAdmin ? (
+                      <label
+                        className="inline-flex items-center gap-2 cursor-pointer select-none"
+                        title="Перевести в категорию грантников / снять отметку"
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4"
+                          checked={!!s.is_grant_student}
+                          disabled={grantBusy === s.id}
+                          onChange={() => onToggleGrant(s)}
+                        />
+                        {s.is_grant_student ? (
+                          <span className="inline-block rounded-full bg-orange-100 text-orange-700 text-xs px-2 py-0.5">
+                            Грантник
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-500">—</span>
+                        )}
+                      </label>
+                    ) : s.is_grant_student ? (
+                      <span className="inline-block rounded-full bg-orange-100 text-orange-700 text-xs px-2 py-0.5">
+                        Грантник
+                      </span>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
                   {isAdmin && (
-                    <td className="text-right">
+                    <td className="text-right whitespace-nowrap">
+                      {s.is_grant_student && (
+                        <button
+                          className="btn-ghost text-orange-600"
+                          onClick={() => onQuickCreateLms(s)}
+                          title="Открыть форму создания LMS-договора с этим студентом"
+                        >
+                          Создать LMS-договор
+                        </button>
+                      )}
                       <button className="btn-ghost" onClick={() => openEditor({ ...EMPTY, ...s })}>Изм.</button>
                       <button className="btn-ghost text-red-600" onClick={() => onDelete(s)}>Удалить</button>
                     </td>

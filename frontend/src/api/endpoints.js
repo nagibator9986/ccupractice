@@ -24,6 +24,10 @@ export const studentsApi = {
   create: (data) => client.post("/students", data).then((r) => r.data),
   update: (id, data) => client.put(`/students/${id}`, data).then((r) => r.data),
   remove: (id) => client.delete(`/students/${id}`).then((r) => r.data),
+  // Admin-only on the backend (PUT /api/students/<sid>/grant). Used by the
+  // Students page toggle and by the LmsContracts create-modal pre-flight.
+  setGrant: (sid, isGrant) =>
+    client.put(`/students/${sid}/grant`, { is_grant_student: !!isGrant }).then((r) => r.data),
 };
 
 export const contractsApi = {

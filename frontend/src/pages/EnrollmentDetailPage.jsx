@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import PageHeader from "../components/PageHeader.jsx";
 import { TextField, SelectField, TextArea } from "../components/Field.jsx";
@@ -205,6 +205,15 @@ export default function EnrollmentDetailPage() {
           Возраст: {item.applicant_age != null ? `${item.applicant_age} ${ruYears(item.applicant_age)}` : "—"}
         </span>
         {item.is_fully_signed && <span className="badge bg-emerald-100 text-emerald-700">✓ Полностью подписан</span>}
+        {item.source_lms_contract_id && (
+          <Link
+            to={`/lms-contracts/${item.source_lms_contract_id}`}
+            className="badge bg-coral-100 text-coral-700 hover:bg-coral-200 transition"
+            title="Перейти к связанному LMS-договору"
+          >
+            LMS-договор № {item.source_lms_contract_number || item.source_lms_contract_id} →
+          </Link>
+        )}
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">

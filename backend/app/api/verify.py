@@ -81,7 +81,11 @@ def _current_file_hash(contract: Contract) -> str | None:
 
 
 def _lms_signature_dto(sig) -> dict:
+    # NOTE: shape mirrors the practicum `_signature_dto` so the SPA renders
+    # both aggregates through the same VerificationBadge component.
     return {
+        "signer_role": sig.signer_party,
+        "signer_role_label": PARTY_LABELS.get(sig.signer_party, sig.signer_party),
         "signer_party": sig.signer_party,
         "signer_party_label": PARTY_LABELS.get(sig.signer_party, sig.signer_party),
         "signer_full_name": sig.signer_full_name or "—",
@@ -90,6 +94,30 @@ def _lms_signature_dto(sig) -> dict:
         "signed_payload_sha256": sig.signed_payload_sha256,
         "verification_level": getattr(sig, "verification_level", "full"),
         "created_at": sig.created_at.isoformat() if sig.created_at else None,
+        "facsimile": False,
+    }
+
+
+def _lms_college_facsimile_dto() -> dict:
+    """College side of an LMS contract is a printed facsimile + М.П. on the
+    bilingual template — there's no ЭЦП row for it. We surface a synthetic
+    entry so the verifier UI lists all three parties (college + the one ЭЦП
+    signer) in one table while VerifyPage still only renders VerificationBadge
+    rows for entries with a `signed_payload_sha256` value.
+    """
+    return {
+        "signer_role": "college",
+        "signer_role_label": _ROLE_LABELS["college"],
+        "signer_party": "college",
+        "signer_party_label": _ROLE_LABELS["college"],
+        "signer_full_name": "—",
+        "signer_iin_or_bin_masked": "",
+        "signer_serial_tail": "",
+        "signed_payload_sha256": None,
+        "verification_level": None,
+        "created_at": None,
+        "facsimile": True,
+        "note": "Подпись и печать — факсимильные на бланке",
     }
 
 
@@ -123,9 +151,18 @@ def _verify_lms(code: str, lms: LmsContract):
         and signed_hash == current_hash
     )
 
+    # Real ЭЦП rows first, college facsimile appended last (purely cosmetic;
+    # the SPA filters facsimile entries out of any cryptographic summary).
+    signature_rows = [
+        _lms_signature_dto(s) for s in sorted(sigs, key=lambda x: x.created_at or 0)
+    ]
+    signature_rows.append(_lms_college_facsimile_dto())
+
     return jsonify(
         kind="lms",
         contract={
+            "kind": "lms",
+            "aggregate": "lms",
             "number": lms.number,
             "verification_code": lms.verify_code,
             "year": lms.year,
@@ -141,7 +178,7 @@ def _verify_lms(code: str, lms: LmsContract):
             "grant_order_number": lms.grant_order_number,
             "grant_order_date": lms.grant_order_date.isoformat() if lms.grant_order_date else None,
         },
-        signatures=[_lms_signature_dto(s) for s in sorted(sigs, key=lambda x: x.created_at or 0)],
+        signatures=signature_rows,
         summary={
             "required_parties": sorted(required_parties),
             "signed_parties": sorted(signed_parties),
@@ -193,7 +230,10 @@ def public_verify(code: str):
     )
 
     return jsonify(
+        kind="practicum",
         contract={
+            "kind": "practicum",
+            "aggregate": "contract",
             "number": contract.number,
             "verification_code": contract.verification_code,
             "year": contract.year,
