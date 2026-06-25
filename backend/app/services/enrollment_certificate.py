@@ -270,22 +270,6 @@ def generate_signature_certificate(
         r.font.name = "Inter"
     doc.add_paragraph()
 
-    # ── Legal disclaimer ──
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    r = p.add_run(
-        "Данный сертификат сформирован автоматически и сам по себе не является "
-        "подписанным электронным документом. Юридически значимы только сами "
-        "договоры и согласия, подписанные ЭЦП НУЦ РК. Сертификат служит "
-        "визуализацией факта подписания: ИИН подписантов скрыты частично, "
-        "сертификаты и сами CMS-подписи хранятся на стороне платформы и могут "
-        "быть проверены по ссылке выше или отдельно через NCANode."
-    )
-    r.italic = True
-    r.font.size = Pt(9)
-    r.font.color.rgb = _BRAND_CHARCOAL
-    r.font.name = "Inter"
-
     doc.save(str(docx_full))
     produced_pdf = _convert_to_pdf(docx_full)
     return docx_full, produced_pdf
