@@ -409,12 +409,13 @@ def public_verify(code: str):
 def public_verify_file(code: str, fmt: str):
     """Public file download — resolves the verify code across all three aggregates.
 
-    Enrollment has TWO documents per row (contract + consent); the consent is
-    addressed via `docx-consent` / `pdf-consent` in the `fmt` slot. Bare
-    `docx` / `pdf` give the main contract document. Practicum and LMS are
-    single-document aggregates and only honour `docx` / `pdf`.
+    PDF downloads on signed enrollments get the merged "Сертификат подписания"
+    annex appended; DOCX downloads stay raw (legal signed payload).
     """
     rel: str | None = None
+    is_enrollment = False
+    enr_obj: EnrollmentContract | None = None
+
     contract: Contract | None = Contract.query.filter_by(verification_code=code).first()
     if contract:
         if fmt == "docx":
@@ -432,7 +433,6 @@ def public_verify_file(code: str, fmt: str):
             enr = EnrollmentContract.query.filter_by(verification_code=code).first()
             if not enr:
                 return jsonify(error="Документ не найден"), 404
-            # Map fmt → (document, ext)
             mapping = {
                 "docx":         ("contract", "docx"),
                 "pdf":          ("contract", "pdf"),
@@ -442,8 +442,30 @@ def public_verify_file(code: str, fmt: str):
             if fmt in mapping:
                 doc_key, ext = mapping[fmt]
                 rel = enr.doc_path(doc_key, ext)
+                is_enrollment = True
+                enr_obj = enr
     if not rel:
         return jsonify(error="Файл недоступен"), 404
-    return send_from_directory(
-        current_app.config["ARCHIVE_FOLDER"], rel, as_attachment=True
-    )
+
+    archive_root = current_app.config["ARCHIVE_FOLDER"]
+    # On enrollment PDF downloads with at least one signature, merge in the
+    # "Сертификат подписания" annex so the file SHOWS the signatures + QR.
+    if is_enrollment and enr_obj and fmt in ("pdf", "pdf-consent") and (enr_obj.signatures or []):
+        from ..services.pdf_visualization import merge_enrollment_pdf
+        from flask import send_file, request as _req
+        base_pdf = Path(archive_root) / rel
+        public_base = _req.headers.get("X-Public-Origin") or None
+        try:
+            merged = merge_enrollment_pdf(enr_obj, base_pdf, public_base=public_base)
+        except Exception as exc:  # noqa: BLE001
+            current_app.logger.exception("Verify PDF merge failed: %s", exc)
+            merged = base_pdf
+        if merged and Path(merged).is_file():
+            return send_file(
+                str(merged),
+                as_attachment=True,
+                download_name=Path(rel).name,
+                mimetype="application/pdf",
+            )
+
+    return send_from_directory(archive_root, rel, as_attachment=True)

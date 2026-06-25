@@ -284,13 +284,46 @@ def generate(eid):
 @bp.get("/<int:eid>/download/<string:document>/<string:fmt>")
 @jwt_required()
 def download(eid, document, fmt):
+    """Download contract/consent files.
+
+    For PDF downloads on enrollments that already carry at least one signature
+    we APPEND a "Сертификат подписания" annex (signers, masked IIN, time,
+    verification level, QR + verify URL) so the downloaded file VISUALLY
+    shows the signatures even when the underlying signed DOCX bytes (which
+    must stay untouched for cryptographic verification) do not.
+
+    DOCX downloads are always served as-is — that file is the legal signed
+    payload and altering its bytes would invalidate every CMS row.
+    """
     e = EnrollmentContract.query.get_or_404(eid)
     if document not in DOCUMENTS or fmt not in ("docx", "pdf"):
         return jsonify(error="Файл не найден"), 404
     rel = e.doc_path(document, fmt)
     if not rel:
         return jsonify(error="Файл не найден"), 404
-    return send_from_directory(current_app.config["ARCHIVE_FOLDER"], rel, as_attachment=True)
+
+    archive_root = current_app.config["ARCHIVE_FOLDER"]
+
+    # PDF + has signatures → serve a merged (visual) copy
+    if fmt == "pdf" and (e.signatures or []):
+        from ..services.pdf_visualization import merge_enrollment_pdf
+        from flask import send_file
+        base_pdf = Path(archive_root) / rel
+        public_base = request.headers.get("X-Public-Origin") or None
+        try:
+            merged = merge_enrollment_pdf(e, base_pdf, public_base=public_base)
+        except Exception as exc:  # noqa: BLE001
+            current_app.logger.exception("PDF merge failed: %s", exc)
+            merged = base_pdf
+        if merged and Path(merged).is_file():
+            return send_file(
+                str(merged),
+                as_attachment=True,
+                download_name=Path(rel).name,
+                mimetype="application/pdf",
+            )
+
+    return send_from_directory(archive_root, rel, as_attachment=True)
 
 
 @bp.get("/<int:eid>/certificate")

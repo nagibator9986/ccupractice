@@ -9,6 +9,11 @@ python-docx==1.1.2
 docxtpl==0.16.8
 Pillow==10.4.0
 qrcode==7.4.2
+# pypdf: append the signature-certificate pages onto every PDF download so the
+# downloaded file VISUALLY shows the signatures + QR even when the underlying
+# signed DOCX bytes (which must stay untouched for cryptographic verification)
+# do not. The merge happens on-the-fly at download time — no storage cost.
+pypdf==5.1.0
 bcrypt==4.2.0
 gunicorn==22.0.0
 cryptography==43.0.1
