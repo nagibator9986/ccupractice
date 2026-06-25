@@ -321,6 +321,11 @@ class LmsContract(db.Model):
             "required_matrix": self.required_matrix,
             "signer_party": signer_party,
             "signer_party_label": PARTY_LABELS.get(signer_party) if signer_party else None,
+            # Raw paths (relative to ARCHIVE_FOLDER) — mirror Contract.to_dict()
+            # so the SPA can check `item.docx_path` directly. The structured
+            # `document` block stays for the multi-document SPA components.
+            "docx_path": self.docx_path,
+            "pdf_path": self.pdf_path,
             "document": {
                 "key": DOC_LMS,
                 "label": DOCUMENT_LABELS.get(DOC_LMS, DOC_LMS),

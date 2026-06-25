@@ -175,7 +175,14 @@ export default function LmsContractDetailPage() {
   }
 
   const signerPartyLabel = item.signer_party_label || "Подписант ещё не определён (укажите дату рождения)";
-  const verifyUrl = item.verify_code ? `/verify/${item.verify_code}` : null;
+  // Absolute URL so admin can copy/share it (display + click target both
+  // work even when the SPA is mounted under a path-prefix).
+  const verifyUrlAbs = item.verify_code
+    ? `${window.location.origin}/verify/${item.verify_code}`
+    : null;
+  // Has a generated file? Tolerate either shape — the backend now exposes
+  // raw `docx_path` AND the structured `document.docx` boolean.
+  const hasDocx = !!(item.docx_path || item.document?.docx);
 
   return (
     <div>
@@ -208,7 +215,7 @@ export default function LmsContractDetailPage() {
                 <div className="flex gap-2">
                   <button className="btn btn-secondary" onClick={save} disabled={busy}>Сохранить</button>
                   <button className="btn btn-primary" onClick={() => generate(false)} disabled={busy}>
-                    {item.docx_path ? "Пересформировать" : "Сформировать"}
+                    {hasDocx ? "Пересформировать" : "Сформировать"}
                   </button>
                 </div>
               )
@@ -294,9 +301,20 @@ export default function LmsContractDetailPage() {
                   >📕 Скачать PDF</button>
                 )}
               </div>
-              {verifyUrl && (
+              {verifyUrlAbs && (
                 <div className="text-xs text-charcoal-500 mt-2">
-                  Публичная проверка: <a className="link" href={verifyUrl} target="_blank" rel="noreferrer">{verifyUrl}</a>
+                  <div className="font-semibold text-charcoal-600 mb-1">Публичная проверка</div>
+                  <div className="flex items-center gap-2">
+                    <a className="link break-all" href={verifyUrlAbs} target="_blank" rel="noreferrer">{verifyUrlAbs}</a>
+                    <button
+                      type="button"
+                      className="btn btn-text text-[11px] shrink-0"
+                      onClick={() => {
+                        navigator.clipboard.writeText(verifyUrlAbs);
+                        toast.success("Ссылка скопирована");
+                      }}
+                    >Скопировать</button>
+                  </div>
                 </div>
               )}
             </div>
@@ -304,13 +322,13 @@ export default function LmsContractDetailPage() {
 
           <Section
             title="Подписание ЭЦП"
-            extra={isAdmin && item.docx_path && (
+            extra={isAdmin && hasDocx && (
               <button className="btn btn-primary text-sm" onClick={() => invite(false)} disabled={busy}>
                 Пригласить
               </button>
             )}
           >
-            {!item.docx_path ? (
+            {!hasDocx ? (
               <div className="text-sm text-charcoal-500">Сначала сформируйте документ.</div>
             ) : !item.signer_party ? (
               <div className="text-sm text-coral-700">Укажите дату рождения студента — от неё зависит подписант.</div>

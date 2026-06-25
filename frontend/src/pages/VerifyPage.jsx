@@ -5,9 +5,12 @@ import { verifyApi } from "../api/endpoints.js";
 import { formatDate, formatDateTime } from "../utils/format.js";
 
 const ROLE_LABELS = {
+  // Practicum (three-party): college / partner / student
   college: "Колледж",
   partner: "Предприятие",
   student: "Обучающийся",
+  // LMS (single-signer) reuses student + adds parent for minors
+  parent: "Родитель (законный представитель)",
 };
 
 const LEVEL_BADGE = {
@@ -69,13 +72,13 @@ export default function VerifyPage() {
     banner = {
       tone: "pending",
       title: "Документ ожидает подписей",
-      sub: `Подписей пока нет (требуется ${summary.required_count}: ${summary.required_roles.map((r) => ROLE_LABELS[r]).join(", ")}).`,
+      sub: `Подписей пока нет (требуется ${summary.required_count}: ${(summary.required_roles || summary.required_parties || []).map((r) => ROLE_LABELS[r] || r).join(", ")}).`,
     };
   } else {
     banner = {
       tone: "partial",
       title: "Документ подписан частично",
-      sub: `Подписали ${summary.signed_count} из ${summary.required_count}. Не хватает: ${summary.missing_roles.map((r) => ROLE_LABELS[r]).join(", ") || "—"}.`,
+      sub: `Подписали ${summary.signed_count} из ${summary.required_count}. Не хватает: ${(summary.missing_roles || summary.missing_parties || []).map((r) => ROLE_LABELS[r] || r).join(", ") || "—"}.`,
     };
   }
 

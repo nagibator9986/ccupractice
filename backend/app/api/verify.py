@@ -180,9 +180,17 @@ def _verify_lms(code: str, lms: LmsContract):
         },
         signatures=signature_rows,
         summary={
+            # Both shapes are emitted so the SPA's existing practicum-shape
+            # code (`summary.required_roles.map(...)`) works without any
+            # `kind`-branching. Parties and roles are identical strings for
+            # LMS — student/parent/college — so the dual naming is harmless
+            # and the migration cost is zero on the frontend side.
             "required_parties": sorted(required_parties),
             "signed_parties": sorted(signed_parties),
             "missing_parties": sorted(required_parties - signed_parties),
+            "required_roles": sorted(required_parties),
+            "signed_roles": sorted(signed_parties),
+            "missing_roles": sorted(required_parties - signed_parties),
             "fully_signed": fully_signed,
             "signed_count": len(signed_parties),
             "required_count": len(required_parties),
