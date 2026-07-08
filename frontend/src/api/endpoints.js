@@ -166,6 +166,15 @@ export const enrollmentsApi = {
   // document — both the Kazakh and Russian columns — before signing.
   publicPreviewUrl: (token, document) =>
     `${API_PREFIX}/enrollments/public/${token}/download/${document}/pdf?inline=1`,
+  // Admin-side "Подпись колледжа" flow: no token, just the admin's own
+  // NCALayer session signs on behalf of the college. Director identity is
+  // auto-pulled from CollegeSettings and never typed by the admin.
+  collegeInfo: (id) =>
+    client.get(`/enrollments/${id}/college-info`).then((r) => r.data),
+  collegePayload: (id, document) =>
+    client.get(`/enrollments/${id}/college-payload/${document}`).then((r) => r.data),
+  collegeSign: (id, document, cms) =>
+    client.post(`/enrollments/${id}/college-sign/${document}`, { cms }).then((r) => r.data),
 };
 
 // Mirror of enrollmentsApi shape so frontend file patterns transfer 1:1 to

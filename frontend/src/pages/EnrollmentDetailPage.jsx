@@ -9,6 +9,7 @@ import { enrollmentsApi, specialtiesApi } from "../api/endpoints.js";
 import { formatDate, formatDateTime, ruYears } from "../utils/format.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { StatusPill, whoSigns } from "./EnrollmentsPage.jsx";
+import { signBase64WithNCALayer, pingNCALayer } from "../utils/ncalayer.js";
 
 const EDITABLE = [
   "number", "contract_date",
@@ -44,6 +45,9 @@ export default function EnrollmentDetailPage() {
   const [specialties, setSpecialties] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [collegeInfo, setCollegeInfo] = useState(null);
+  const [ncaAvailable, setNcaAvailable] = useState(null);
+  const [collegeSigning, setCollegeSigning] = useState(false);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -88,6 +92,28 @@ export default function EnrollmentDetailPage() {
   }, [id, isAdmin]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    enrollmentsApi
+      .collegeInfo(id)
+      .then((info) => setCollegeInfo(info))
+      .catch(() => {/* section will show a hint about missing college settings */});
+  }, [id, isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) return undefined;
+    let cancelled = false;
+    let timer = null;
+    const probe = async () => {
+      const ok = await pingNCALayer();
+      if (cancelled) return;
+      setNcaAvailable(ok);
+      if (!ok) timer = setTimeout(probe, 5000);
+    };
+    probe();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [isAdmin]);
 
   async function save() {
     setBusy(true);
@@ -174,6 +200,44 @@ export default function EnrollmentDetailPage() {
       await enrollmentsApi.downloadDoc(id, doc, fmt, `${item.number || id}_${doc}.${fmt}`);
     } catch {
       toast.error("Не удалось скачать файл");
+    }
+  }
+
+  async function signCollege() {
+    if (collegeSigning) return;
+    setCollegeSigning(true);
+    const t = toast.loading("Проверка NCALayer…");
+    try {
+      // Sign every document the college is responsible for and hasn't yet
+      // signed. Existing student/parent signatures on those documents are
+      // preserved by the backend — this only appends a college-side row.
+      const collegeDocs = (item.required_matrix || {}).college || [];
+      const docsToSign = collegeDocs.filter((key) => {
+        const alreadyCollege = (item.signatures || []).some(
+          (s) => s.document === key && s.signer_party === "college",
+        );
+        return !alreadyCollege;
+      });
+      if (docsToSign.length === 0) {
+        toast.success("Все документы колледжа уже подписаны", { id: t });
+        return;
+      }
+      for (const doc of docsToSign) {
+        toast.loading(`Получаем ${item.documents[doc].label}…`, { id: t });
+        const { payload_base64, document_label } = await enrollmentsApi.collegePayload(id, doc);
+        toast.loading(`Откройте NCALayer и подпишите: ${document_label}`, { id: t });
+        const cms = await signBase64WithNCALayer(payload_base64);
+        toast.loading(`Сохраняем подпись: ${document_label}`, { id: t });
+        const res = await enrollmentsApi.collegeSign(id, doc, cms);
+        if (res?.warnings?.length) res.warnings.forEach((w) => toast(w, { icon: "⚠️", duration: 6000 }));
+      }
+      toast.success(`Колледж подписал: ${docsToSign.length} документ(-а)`, { id: t });
+      await load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || e.message || "Ошибка подписания", { id: t });
+      await refresh();
+    } finally {
+      setCollegeSigning(false);
     }
   }
 
@@ -327,9 +391,10 @@ export default function EnrollmentDetailPage() {
                       {parties.length === 0 && <div className="text-[11px] text-charcoal-400">Укажите дату рождения</div>}
                       {parties.map((p) => {
                         const signed = (item.signatures || []).some((s) => s.document === doc && s.signer_party === p);
+                        const label = p === "parent" ? "Родитель" : p === "college" ? "Колледж" : "Студент";
                         return (
                           <div key={p} className="flex items-center justify-between text-[11px]">
-                            <span className="text-charcoal-500">{p === "parent" ? "Родитель" : "Студент"}</span>
+                            <span className="text-charcoal-500">{label}</span>
                             <span className={signed ? "text-emerald-600 font-semibold" : "text-charcoal-400"}>
                               {signed ? "✓ подписано" : "ожидает"}
                             </span>
@@ -342,6 +407,87 @@ export default function EnrollmentDetailPage() {
               })}
             </div>
           </Section>
+
+          {isAdmin && (matrix.college || []).length > 0 && (
+            <Section
+              title="Подпись колледжа"
+              extra={
+                ncaAvailable === false
+                  ? <span className="badge bg-red-100 text-red-700">NCALayer offline</span>
+                  : ncaAvailable === true
+                    ? <span className="badge bg-emerald-100 text-emerald-700">NCALayer online</span>
+                    : <span className="badge bg-charcoal-100 text-charcoal-600">Проверка…</span>
+              }
+            >
+              <p className="text-xs text-charcoal-500 mb-3">
+                Директор подписывает ЭЦП сразу все документы колледжа (договор + согласие).
+                Данные подписанта подтягиваются автоматически из настроек колледжа.
+              </p>
+              <div className="rounded-xl bg-coral-50/60 ring-1 ring-coral-100 p-3 mb-3">
+                <div className="text-[11px] uppercase tracking-wide font-semibold text-charcoal-500 mb-1">Подписант</div>
+                <div className="font-medium text-sm">{collegeInfo?.director_full_name || "—"}</div>
+                <div className="text-[11px] text-charcoal-500 mt-0.5">
+                  {collegeInfo?.college_name || "—"} · БИН {collegeInfo?.college_bin || "—"}
+                </div>
+                {collegeInfo?.director_basis && (
+                  <div className="text-[11px] text-charcoal-500">Основание: {collegeInfo.director_basis}</div>
+                )}
+                {!collegeInfo?.director_full_name && (
+                  <div className="text-[11px] text-red-600 mt-1">
+                    Заполните ФИО директора в <Link to="/settings" className="underline">Настройках колледжа</Link>.
+                  </div>
+                )}
+              </div>
+              {(() => {
+                const collegeDocs = matrix.college || [];
+                const remaining = collegeDocs.filter((k) => !(item.signatures || []).some((s) => s.document === k && s.signer_party === "college"));
+                const doneCount = collegeDocs.length - remaining.length;
+                return (
+                  <>
+                    <div className="text-xs text-charcoal-600 mb-2">
+                      Готово: <b>{doneCount}</b> из <b>{collegeDocs.length}</b>
+                    </div>
+                    <div className="space-y-1 mb-3">
+                      {collegeDocs.map((k) => {
+                        const isDone = doneCount > 0 && !remaining.includes(k);
+                        const meta = item.documents?.[k] || {};
+                        return (
+                          <div key={k} className="flex items-center justify-between text-[11px]">
+                            <span className="text-charcoal-600">{meta.label || k}</span>
+                            <span className={isDone ? "text-emerald-600 font-semibold" : "text-charcoal-400"}>
+                              {isDone ? "✓ подписано" : "ожидает"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <button
+                      className="btn-primary w-full"
+                      onClick={signCollege}
+                      disabled={
+                        collegeSigning ||
+                        !ncaAvailable ||
+                        !collegeInfo?.director_full_name ||
+                        remaining.length === 0 ||
+                        !collegeDocs.every((k) => item.documents?.[k]?.docx)
+                      }
+                    >
+                      {collegeSigning
+                        ? "Подписание…"
+                        : remaining.length === 0
+                          ? "Всё подписано"
+                          : `Подписать ЭЦП (${remaining.length})`}
+                    </button>
+                    {!collegeDocs.every((k) => item.documents?.[k]?.docx) && (
+                      <div className="text-[11px] text-charcoal-500 mt-2">
+                        Сначала сформируйте документы.
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </Section>
+          )}
 
           {isAdmin && (
             <Section
@@ -392,23 +538,51 @@ export default function EnrollmentDetailPage() {
             </Section>
           )}
 
-          <Section title="Подписи">
+          <Section
+            title={`Подписи (${(item.signatures || []).length})`}
+            extra={
+              item.is_fully_signed
+                ? <span className="badge bg-emerald-100 text-emerald-700">✓ Все стороны</span>
+                : <span className="badge bg-amber-100 text-amber-700">Ожидаются</span>
+            }
+          >
             {(item.signatures || []).length === 0 ? (
               <div className="text-sm text-charcoal-500">Подписей пока нет.</div>
             ) : (
-              <ul className="space-y-2 text-sm">
-                {item.signatures.map((s) => (
-                  <li key={s.id} className="rounded-lg bg-charcoal-50 p-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="font-medium">{s.document_label}</div>
-                      <VerificationBadge level={s.verification_level} className="text-[10px]" />
-                    </div>
-                    <div className="text-xs text-charcoal-600">
-                      {s.signer_party_label}: {s.signer_full_name || "—"} (ИИН {s.signer_iin_or_bin || "—"})
-                    </div>
-                    <div className="text-[11px] text-charcoal-400">{formatDateTime(s.created_at)}</div>
-                  </li>
-                ))}
+              <ul className="space-y-3">
+                {[...item.signatures].sort((a, b) => (a.created_at || "").localeCompare(b.created_at || "")).map((s) => {
+                  const isCollege = s.signer_party === "college";
+                  const orgName = isCollege ? (collegeInfo?.college_name || "Колледж") : null;
+                  const orgIdLabel = isCollege ? "БИН" : "ИИН";
+                  return (
+                    <li key={s.id} className="rounded-xl bg-white ring-1 ring-charcoal-100 p-3 shadow-sm">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <span className={`badge ${isCollege ? "bg-coral-100 text-coral-700" : "bg-charcoal-100 text-charcoal-700"}`}>
+                          {s.signer_party_label}
+                        </span>
+                        <VerificationBadge level={s.verification_level} className="text-[10px]" />
+                      </div>
+                      <div className="text-sm font-semibold text-charcoal-700">{s.document_label}</div>
+                      {isCollege && orgName && (
+                        <div className="mt-2 text-xs text-charcoal-600">
+                          <div className="text-[10px] uppercase tracking-wide text-charcoal-400">Организация</div>
+                          <div className="font-medium">{orgName}</div>
+                        </div>
+                      )}
+                      <div className="mt-2 text-xs text-charcoal-700">
+                        <div className="text-[10px] uppercase tracking-wide text-charcoal-400">
+                          {isCollege ? "Директор" : "Подписант"}
+                        </div>
+                        <div className="font-medium">{s.signer_full_name || "—"}</div>
+                        <div className="text-[11px] text-charcoal-500">{orgIdLabel}: {s.signer_iin_or_bin || "—"}</div>
+                      </div>
+                      <div className="mt-2 text-[11px] text-charcoal-400">
+                        {formatDateTime(s.created_at)}
+                        {s.signer_serial && <> · сертификат …{String(s.signer_serial).slice(-8).toUpperCase()}</>}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </Section>

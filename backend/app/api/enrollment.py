@@ -27,6 +27,7 @@ from ..models import (
     DOCUMENT_LABELS,
     PARTY_LABELS,
     PARTY_PARENT,
+    PARTY_COLLEGE,
 )
 from ..services.enrollment_documents import generate_enrollment_files
 from ..services.signature_service import SignatureError, payload_sha256
@@ -382,6 +383,15 @@ def delete_enrollment(eid):
 def _recipient_for(e: EnrollmentContract, party: str) -> dict:
     if party == PARTY_PARENT:
         return {"name": e.parent_full_name, "iin": e.parent_iin}
+    if party == PARTY_COLLEGE:
+        # Auto-pull the director's data from CollegeSettings — admin never
+        # types it in. `bin` is used as identity because the college signs
+        # AS an organisation.
+        s = CollegeSettings.query.first()
+        return {
+            "name": (s.director_full_name if s else "") or "",
+            "iin": (s.bin if s else "") or "",
+        }
     return {"name": e.applicant_full_name, "iin": e.applicant_iin}
 
 
@@ -402,14 +412,16 @@ def invite(eid):
     force = bool(data.get("force"))
     requested = data.get("parties")
     if requested is None:
-        requested = list(matrix.keys())
+        # The college signs admin-side (no token), so it is never invited via
+        # this endpoint even though ``required_matrix`` includes it.
+        requested = [p for p in matrix.keys() if p != PARTY_COLLEGE]
     elif not isinstance(requested, list):
         return jsonify(error="Поле parties должно быть массивом"), 400
 
     created = []
     cleared_any = False
     for party in requested:
-        if party not in matrix:
+        if party not in matrix or party == PARTY_COLLEGE:
             continue
         active = EnrollmentSigningRequest.query.filter_by(enrollment_id=eid, signer_party=party).filter(
             EnrollmentSigningRequest.status.in_(("pending", "viewed"))
@@ -493,6 +505,149 @@ def resend(rid):
     sr.expires_at = utc_now() + timedelta(days=EnrollmentSigningRequest.DEFAULT_TTL_DAYS)
     db.session.commit()
     return jsonify(item=sr.to_dict(include_token=True, public_base_url=_public_base()))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin: sign as College (no public token — the admin's own NCALayer session
+# signs on behalf of the college; the director's identity is auto-pulled from
+# CollegeSettings, so the admin never types anything).
+# ─────────────────────────────────────────────────────────────────────────────
+
+@bp.get("/<int:eid>/college-info")
+@admin_required
+def college_info(eid):
+    """Return the director's ЭЦП-signable identity for the college side.
+
+    Consumed by the "Подпись колледжа" card on the enrollment detail page so
+    the admin sees exactly what will be recorded before they press "Подписать".
+    """
+    EnrollmentContract.query.get_or_404(eid)
+    s = CollegeSettings.query.first()
+    return jsonify(
+        director_full_name=(s.director_full_name if s else "") or "",
+        director_basis=(s.director_basis if s else "") or "",
+        college_name=(s.name_ru if s else "") or "",
+        college_bin=(s.bin if s else "") or "",
+        college_address=(s.address if s else "") or "",
+    )
+
+
+@bp.get("/<int:eid>/college-payload/<string:document>")
+@admin_required
+def college_payload(eid, document):
+    """Return the DOCX bytes for the college to sign — the admin's browser
+    hands these to NCALayer, gets a CMS back, then POSTs it to
+    /college-sign/<document>. Existing student/parent signatures on the
+    document must NOT block this — the college side is a separate slot in
+    the ``EnrollmentSignature`` unique constraint (enrollment_id, document,
+    signer_party) so all three parties can coexist.
+    """
+    e = EnrollmentContract.query.get_or_404(eid)
+    if document not in DOCUMENTS:
+        return jsonify(error="Неизвестный документ"), 400
+    rel = e.doc_path(document, "docx")
+    if not rel:
+        return jsonify(error="Сначала сформируйте документы"), 400
+    path = Path(current_app.config["ARCHIVE_FOLDER"]) / rel
+    if not path.is_file():
+        return jsonify(error="Файл документа недоступен на сервере"), 500
+    data = path.read_bytes()
+    return jsonify(
+        sha256=payload_sha256(data),
+        payload_base64=base64.b64encode(data).decode("ascii"),
+        size=len(data),
+        filename=path.name,
+        document=document,
+        document_label=DOCUMENT_LABELS[document],
+    )
+
+
+@bp.post("/<int:eid>/college-sign/<string:document>")
+@admin_required
+def college_sign(eid, document):
+    """Attach a college-side ЭЦП to `document` on this enrollment.
+
+    SAFETY: This adds a NEW EnrollmentSignature row with
+    signer_party="college". The existing (enrollment_id, document, signer_party)
+    unique constraint guarantees at most one college signature per
+    (enrollment, document) — student and parent signatures on the same
+    document row stay untouched.
+    """
+    e = EnrollmentContract.query.get_or_404(eid)
+    if document not in DOCUMENTS:
+        return jsonify(error="Неизвестный документ"), 400
+
+    existing = EnrollmentSignature.query.filter_by(
+        enrollment_id=e.id, document=document, signer_party=PARTY_COLLEGE,
+    ).first()
+    if existing:
+        return jsonify(error="Колледж уже подписал этот документ", code="signed"), 409
+
+    data = get_json_safe()
+    cms_b64 = (data.get("cms") or "").strip()
+    if not cms_b64:
+        return jsonify(error="Подпись не передана"), 400
+
+    rel = e.doc_path(document, "docx")
+    if not rel:
+        return jsonify(error="Сначала сформируйте документы"), 400
+    path = Path(current_app.config["ARCHIVE_FOLDER"]) / rel
+    if not path.is_file():
+        return jsonify(error="Файл документа недоступен на сервере"), 500
+    payload_bytes = path.read_bytes()
+
+    try:
+        parsed = verify_cms_signature(cms_b64, payload_bytes)
+    except SignatureError as exc:
+        return jsonify(error=str(exc)), 400
+
+    # Soft identity check against the director's BIN in CollegeSettings.
+    settings = CollegeSettings.query.first()
+    expected_bin = _normalize_iin((settings.bin if settings else "") or "")
+    actual_id = _normalize_iin(parsed.signer_iin_or_bin)
+    identity_mismatch = bool(expected_bin and actual_id and expected_bin != actual_id)
+    if identity_mismatch:
+        current_app.logger.warning(
+            "College signature ID mismatch e=%s doc=%s expected_bin=%s signer=%s",
+            e.id, document, expected_bin, actual_id,
+        )
+
+    sig = EnrollmentSignature(
+        enrollment_id=e.id,
+        document=document,
+        signer_party=PARTY_COLLEGE,
+        signer_full_name=parsed.signer_full_name,
+        signer_iin_or_bin=parsed.signer_iin_or_bin,
+        signer_serial=parsed.signer_serial,
+        signer_certificate_pem=parsed.certificate_pem,
+        cms_signature=cms_b64,
+        signed_payload_sha256=parsed.payload_sha256,
+        verification_level=parsed.verification_level,
+    )
+    db.session.add(sig)
+    try:
+        db.session.commit()
+    except (IntegrityError, OperationalError):
+        db.session.rollback()
+        return jsonify(error="Колледж уже подписал этот документ", code="signed"), 409
+
+    if e.is_fully_signed and e.status != EnrollmentStatus.SIGNED:
+        e.status = EnrollmentStatus.SIGNED
+        try:
+            db.session.commit()
+        except (IntegrityError, OperationalError):
+            db.session.rollback()
+
+    return jsonify(
+        ok=True,
+        signature=sig.to_dict(),
+        warnings=parsed.warnings + (
+            [f"БИН подписанта ({actual_id}) не совпал с ожидаемым ({expected_bin})"]
+            if identity_mismatch else []
+        ),
+        document=document,
+        all_signed=e.is_fully_signed,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -38,9 +38,11 @@ DOCUMENT_LABELS = {
 # Signing parties.
 PARTY_STUDENT = "student"
 PARTY_PARENT = "parent"
+PARTY_COLLEGE = "college"
 PARTY_LABELS = {
     PARTY_STUDENT: "Обучающийся (абитуриент)",
     PARTY_PARENT: "Законный представитель (родитель)",
+    PARTY_COLLEGE: "Колледж (директор)",
 }
 
 # Age (in full years, at the contract date) at/above which the applicant signs
@@ -59,11 +61,17 @@ def _full_years(born: date | None, on: date | None) -> int | None:
     return on.year - born.year - ((on.month, on.day) < (born.month, born.day))
 
 
-def signing_matrix(age: int | None) -> dict[str, list[str]]:
+def signing_matrix(age: int | None, include_college: bool = True) -> dict[str, list[str]]:
     """Return {party: [documents]} the party must sign, given the applicant age.
 
     Returns ``{}`` when age is unknown — the caller must require a birth date
     before inviting signers (otherwise the legally-correct signer is ambiguous).
+
+    The COLLEGE side is now signed via ЭЦП as well (was previously a
+    facsimile М.П. on the template — the director signs both documents from
+    the admin panel through the dedicated "Подпись колледжа" card). If a
+    legacy caller needs the pre-college matrix (for backwards compatibility
+    with old status-transition assumptions), pass include_college=False.
 
     The LMS (Caspian Digital) contract is its own aggregate now — see
     ``models/lms_contract.lms_signing_matrix`` — so it is no longer mixed into
@@ -73,9 +81,17 @@ def signing_matrix(age: int | None) -> dict[str, list[str]]:
         return {}
     if age >= ADULT_SIGN_AGE:
         # Applicant signs the contract and consent; parent co-signs the consent.
-        return {PARTY_STUDENT: [DOC_CONTRACT, DOC_CONSENT], PARTY_PARENT: [DOC_CONSENT]}
-    # Minor: the legal representative signs everything.
-    return {PARTY_PARENT: [DOC_CONTRACT, DOC_CONSENT]}
+        matrix = {
+            PARTY_STUDENT: [DOC_CONTRACT, DOC_CONSENT],
+            PARTY_PARENT: [DOC_CONSENT],
+        }
+    else:
+        # Minor: the legal representative signs everything on the applicant's behalf.
+        matrix = {PARTY_PARENT: [DOC_CONTRACT, DOC_CONSENT]}
+    if include_college:
+        # College (director) signs both documents from the admin side.
+        matrix[PARTY_COLLEGE] = [DOC_CONTRACT, DOC_CONSENT]
+    return matrix
 
 
 class EnrollmentStatus:
