@@ -41,6 +41,25 @@ def _fmt_amount(value) -> str:
         return str(value)
 
 
+_BLANK = "____________"
+
+
+def _v(value) -> str:
+    """Render a field value: fall back to a visible fill-in line for empties.
+
+    Consent and contract templates weave variables directly into sentence
+    prose ("Я, {{ applicant.full_name }} (ФИО)…"). If the underlying field
+    is empty the rendered doc silently collapses to "Я,  (ФИО)…" — a mystery
+    to anyone reading it. Emit a visible ``____________`` instead so the
+    reader sees the field is unfilled, matching how the printed form would
+    look; the admin then knows to fill the data and regenerate BEFORE
+    inviting signers.
+    """
+    if value in (None, ""):
+        return _BLANK
+    return str(value)
+
+
 def _build_context(e: EnrollmentContract) -> dict:
     settings = CollegeSettings.query.first()
     d = e.contract_date or utc_today()
@@ -55,16 +74,17 @@ def _build_context(e: EnrollmentContract) -> dict:
         e.applicant_address_street,
         (f"д. {e.applicant_address_house}" if e.applicant_address_house else None),
     ]
+    joined_addr = ", ".join(p for p in addr_parts if p)
     applicant = {
-        "full_name": e.applicant_full_name or "",
-        "iin": e.applicant_iin or "",
+        "full_name": _v(e.applicant_full_name),
+        "iin": _v(e.applicant_iin),
         "birth_date": _fmt_date(e.applicant_birth_date),
         "gender": e.applicant_gender or "",
         "id_doc_type": e.applicant_id_doc_type or "удостоверение личности",
-        "id_doc_number": e.applicant_id_doc_number or "",
-        "id_doc_issued_by": e.applicant_id_doc_issued_by or "",
+        "id_doc_number": _v(e.applicant_id_doc_number),
+        "id_doc_issued_by": _v(e.applicant_id_doc_issued_by),
         "id_doc_issued_date": _fmt_date(e.applicant_id_doc_issued_date),
-        "address": ", ".join(p for p in addr_parts if p) or "",
+        "address": _v(joined_addr),
         # Separate address parts feed the bilingual contract's split address line
         # (город / район / улица / дом); the joined `address` feeds the consent.
         "addr_city": e.applicant_address_city or "",
@@ -80,12 +100,12 @@ def _build_context(e: EnrollmentContract) -> dict:
         "is_minor": is_minor,
     }
     parent = {
-        "full_name": e.parent_full_name or "",
+        "full_name": _v(e.parent_full_name),
         "relation": e.parent_relation or "",
-        "iin": e.parent_iin or "",
-        "id_doc_number": e.parent_id_doc_number or "",
-        "id_doc_issued_by": e.parent_id_doc_issued_by or "",
-        "address": e.parent_address or "",
+        "iin": _v(e.parent_iin),
+        "id_doc_number": _v(e.parent_id_doc_number),
+        "id_doc_issued_by": _v(e.parent_id_doc_issued_by),
+        "address": _v(e.parent_address),
         "phone": e.parent_phone or "",
         "email": e.parent_email or "",
     }

@@ -31,7 +31,11 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 # (ensure_enrollment_templates only builds a file that doesn't already exist).
 CONTRACT_FILENAME = "contract_enrollment_template_v3.docx"
 LMS_FILENAME = "contract_lms_template_v1.docx"
-CONSENT_FILENAME = "consent_template_v2.docx"
+# Bumped to v3: on production a stale v2 file with hardcoded underscore
+# fields (no {{ jinja }} placeholders) was persisting on the deployed
+# volume, so every re-render produced an empty consent. A fresh filename
+# forces ``ensure_enrollment_templates`` to rebuild it from source.
+CONSENT_FILENAME = "consent_template_v3.docx"
 
 SOURCE_DIRNAME = "source"
 SOURCE_CONTRACT = "source_contract_edu.docx"

@@ -57,10 +57,13 @@ export default function VerifyPage() {
   // Status banner
   let banner;
   if (allSigned && integrityKnown && integrityOk) {
+    const partyWord = summary.required_count === 1 ? "сторона подписала"
+      : summary.required_count < 5 ? "стороны подписали"
+        : "сторон подписали";
     banner = {
       tone: "ok",
       title: "Документ подписан и подлинность подтверждена",
-      sub: "Все три стороны подписали договор, хэш SHA-256 архивного файла совпадает с хэшем подписи.",
+      sub: `Все ${summary.required_count} ${partyWord} договор, хэш SHA-256 архивного файла совпадает с хэшем подписи.`,
     };
   } else if (allSigned && integrityKnown && !integrityOk) {
     banner = {

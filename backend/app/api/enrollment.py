@@ -631,7 +631,17 @@ def college_sign(eid, document):
         db.session.rollback()
         return jsonify(error="Колледж уже подписал этот документ", code="signed"), 409
 
-    if e.is_fully_signed and e.status != EnrollmentStatus.SIGNED:
+    # Recompute fully-signed from committed rows so the SIGNED status transition
+    # is robust against any relationship-cache staleness in the just-committed
+    # session (mirrors the same explicit-query pattern used in public_submit).
+    committed_pairs = {
+        (s.document, s.signer_party)
+        for s in EnrollmentSignature.query.filter_by(enrollment_id=e.id).all()
+    }
+    matrix = e.required_matrix
+    need_pairs = {(doc, party) for party, docs in matrix.items() for doc in docs}
+    fully_signed = bool(matrix) and need_pairs.issubset(committed_pairs)
+    if fully_signed and e.status != EnrollmentStatus.SIGNED:
         e.status = EnrollmentStatus.SIGNED
         try:
             db.session.commit()
@@ -646,7 +656,7 @@ def college_sign(eid, document):
             if identity_mismatch else []
         ),
         document=document,
-        all_signed=e.is_fully_signed,
+        all_signed=fully_signed,
     )
 
 
@@ -876,7 +886,16 @@ def public_submit(token, document):
         sr.status = "signed"
         sr.signed_at = utc_now()
 
-    if e.is_fully_signed and e.status != EnrollmentStatus.SIGNED:
+    # Robust status transition — recompute fully_signed from committed rows so
+    # the check doesn't depend on the just-committed relationship being refreshed.
+    committed_pairs = {
+        (s.document, s.signer_party)
+        for s in EnrollmentSignature.query.filter_by(enrollment_id=e.id).all()
+    }
+    matrix = e.required_matrix
+    need_pairs = {(doc, party_) for party_, docs in matrix.items() for doc in docs}
+    fully_signed = bool(matrix) and need_pairs.issubset(committed_pairs)
+    if fully_signed and e.status != EnrollmentStatus.SIGNED:
         e.status = EnrollmentStatus.SIGNED
     try:
         db.session.commit()
@@ -892,7 +911,7 @@ def public_submit(token, document):
         ),
         document=document,
         remaining=[d for d in _party_documents(e, party) if d not in signed_docs],
-        all_signed=e.is_fully_signed,
+        all_signed=fully_signed,
     )
 
 
