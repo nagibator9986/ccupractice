@@ -545,7 +545,13 @@ export default function EnrollmentDetailPage() {
             const orgBin = collegeInfo?.college_bin || "";
             const orgAddr = collegeInfo?.college_address || "";
             const basis = collegeInfo?.director_basis || "";
-            const director = collegeSigs[0].signer_full_name || "—";
+            // Prefer the authoritative director ФИО from CollegeSettings — the
+            // ЭЦП certificate's CN sometimes carries only Kazakh given-name +
+            // patronymic without a surname. Keep the cert name available as a
+            // secondary audit line.
+            const certName = collegeSigs[0].signer_full_name || "";
+            const director = collegeInfo?.director_full_name || certName || "—";
+            const showCertName = certName && certName !== collegeInfo?.director_full_name;
             return (
               <Section
                 title="Подпись организации"
@@ -563,6 +569,9 @@ export default function EnrollmentDetailPage() {
                     <div className="text-[10px] uppercase tracking-wider font-bold text-coral-700 mb-1">Директор</div>
                     <div className="font-semibold text-sm text-charcoal-700">{director}</div>
                     {basis && <div className="text-[11px] text-charcoal-500 mt-0.5">Действует на основании: {basis}</div>}
+                    {showCertName && (
+                      <div className="text-[10px] text-charcoal-400 mt-1">ФИО по сертификату ЭЦП: {certName}</div>
+                    )}
                   </div>
                   <div className="border-t border-coral-200 mt-3 pt-3 text-[11px] text-charcoal-600">
                     Подписал документ(ов): <b>{collegeSigs.length}</b> из <b>{(matrix.college || []).length}</b>
@@ -590,7 +599,15 @@ export default function EnrollmentDetailPage() {
                 {[...item.signatures].sort((a, b) => (a.created_at || "").localeCompare(b.created_at || "")).map((s) => {
                   const isCollege = s.signer_party === "college";
                   const orgName = isCollege ? (collegeInfo?.college_name || "Колледж") : null;
-                  const orgIdLabel = isCollege ? "БИН" : "ИИН";
+                  // A college signature is an organization's ЭЦП but the
+                  // certificate's IIN is the DIRECTOR's personal ID (the
+                  // physical person holding the key). We label it as ИИН and
+                  // additionally show the organization's БИН from settings.
+                  const certName = s.signer_full_name || "";
+                  const displayName = isCollege
+                    ? (collegeInfo?.director_full_name || certName || "—")
+                    : (certName || "—");
+                  const showCertFallback = isCollege && certName && certName !== collegeInfo?.director_full_name;
                   return (
                     <li key={s.id} className="rounded-xl bg-white ring-1 ring-charcoal-100 p-3 shadow-sm">
                       <div className="flex items-center justify-between gap-2 mb-2">
@@ -604,14 +621,20 @@ export default function EnrollmentDetailPage() {
                         <div className="mt-2 text-xs text-charcoal-600">
                           <div className="text-[10px] uppercase tracking-wide text-charcoal-400">Организация</div>
                           <div className="font-medium">{orgName}</div>
+                          {collegeInfo?.college_bin && (
+                            <div className="text-[11px] text-charcoal-500">БИН: {collegeInfo.college_bin}</div>
+                          )}
                         </div>
                       )}
                       <div className="mt-2 text-xs text-charcoal-700">
                         <div className="text-[10px] uppercase tracking-wide text-charcoal-400">
                           {isCollege ? "Директор" : "Подписант"}
                         </div>
-                        <div className="font-medium">{s.signer_full_name || "—"}</div>
-                        <div className="text-[11px] text-charcoal-500">{orgIdLabel}: {s.signer_iin_or_bin || "—"}</div>
+                        <div className="font-medium">{displayName}</div>
+                        <div className="text-[11px] text-charcoal-500">ИИН: {s.signer_iin_or_bin || "—"}</div>
+                        {showCertFallback && (
+                          <div className="text-[10px] text-charcoal-400 mt-0.5">ФИО по сертификату ЭЦП: {certName}</div>
+                        )}
                       </div>
                       <div className="mt-2 text-[11px] text-charcoal-400">
                         {formatDateTime(s.created_at)}

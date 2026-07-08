@@ -218,15 +218,30 @@ def generate_signature_certificate(
                     # Explicit ORGANIZATION signature block — this is what the
                     # user sees as "подпись организации", distinct from the
                     # personal (студент / родитель) signatures below.
+                    # Director's ФИО is taken from CollegeSettings (authoritative
+                    # organizational record) — the ЭЦП certificate's CN often
+                    # carries only the Kazakh given-name+patronymic form
+                    # (e.g. "АНУАШ ДҮЙСЕНБЕКҰЛЫ"), so we surface the settings
+                    # name as the primary line and the cert-CN separately for
+                    # auditability.
+                    director_from_settings = (
+                        (college.director_full_name if college else "") or ""
+                    )
+                    display_director = director_from_settings or (s.signer_full_name or "—")
                     _kv(doc, "    Организация", college_name, bold_value=True)
                     if college_bin:
                         _kv(doc, "    БИН", college_bin)
                     if college_addr:
                         _kv(doc, "    Адрес", college_addr)
-                    _kv(doc, "    Директор", s.signer_full_name or "—", bold_value=True)
+                    _kv(doc, "    Директор", display_director, bold_value=True)
                     if college_basis:
                         _kv(doc, "    Действует на основании", college_basis)
-                    _kv(doc, "    БИН подписанта (по сертификату)", _mask_iin(s.signer_iin_or_bin))
+                    # Preserve the ЭЦП certificate's own identity for audit —
+                    # do NOT drop it, since it's the legal proof of who owned
+                    # the private key at signing time.
+                    if s.signer_full_name and s.signer_full_name != director_from_settings:
+                        _kv(doc, "    ФИО по сертификату ЭЦП", s.signer_full_name)
+                    _kv(doc, "    ИИН подписанта (по сертификату)", _mask_iin(s.signer_iin_or_bin))
                 else:
                     _kv(doc, "    Подписант", s.signer_full_name or "—", bold_value=True)
                     _kv(doc, "    ИИН (скрыт)", _mask_iin(s.signer_iin_or_bin))
