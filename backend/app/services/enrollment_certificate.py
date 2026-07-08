@@ -35,8 +35,10 @@ from docx.shared import Cm, Pt, RGBColor
 from flask import current_app
 
 from ..models import (
+    CollegeSettings,
     DOCUMENT_LABELS,
     EnrollmentContract,
+    PARTY_COLLEGE,
     PARTY_LABELS,
 )
 from ..utils.files import ensure_dir, safe_filename
@@ -186,6 +188,15 @@ def generate_signature_certificate(
     for s in e.signatures or []:
         sigs_by_doc.setdefault(s.document, []).append(s)
 
+    # College identity — used to render the ORGANIZATION signature block explicitly
+    # for every college-side signature so the reader sees the org signature, not
+    # just a director's personal ЭЦП. Loaded once per certificate generation.
+    college = CollegeSettings.query.first()
+    college_name = (college.name_ru if college else "") or "Колледж"
+    college_bin = (college.bin if college else "") or ""
+    college_addr = (college.address if college else "") or ""
+    college_basis = (college.director_basis if college else "") or ""
+
     docs_in_play = e.relevant_documents
     if not any(sigs_by_doc.get(d) for d in docs_in_play):
         _p(doc, "На момент формирования сертификата подписей нет.",
@@ -199,11 +210,26 @@ def generate_signature_certificate(
                 _p(doc, "  Подписей нет.", size=10, color=_BRAND_CHARCOAL, italic=True)
                 continue
             for j, s in enumerate(sorted(sigs, key=lambda x: x.created_at or 0)):
+                is_college = s.signer_party == PARTY_COLLEGE
                 party_label = PARTY_LABELS.get(s.signer_party, s.signer_party)
                 _p(doc, f"  Подпись №{j + 1} — {party_label}", size=11, bold=True,
-                   color=_BRAND_INK)
-                _kv(doc, "    Подписант", s.signer_full_name or "—", bold_value=True)
-                _kv(doc, "    ИИН (скрыт)", _mask_iin(s.signer_iin_or_bin))
+                   color=_BRAND_CORAL if is_college else _BRAND_INK)
+                if is_college:
+                    # Explicit ORGANIZATION signature block — this is what the
+                    # user sees as "подпись организации", distinct from the
+                    # personal (студент / родитель) signatures below.
+                    _kv(doc, "    Организация", college_name, bold_value=True)
+                    if college_bin:
+                        _kv(doc, "    БИН", college_bin)
+                    if college_addr:
+                        _kv(doc, "    Адрес", college_addr)
+                    _kv(doc, "    Директор", s.signer_full_name or "—", bold_value=True)
+                    if college_basis:
+                        _kv(doc, "    Действует на основании", college_basis)
+                    _kv(doc, "    БИН подписанта (по сертификату)", _mask_iin(s.signer_iin_or_bin))
+                else:
+                    _kv(doc, "    Подписант", s.signer_full_name or "—", bold_value=True)
+                    _kv(doc, "    ИИН (скрыт)", _mask_iin(s.signer_iin_or_bin))
                 _kv(doc, "    Серийный № сертификата", _serial_tail(s.signer_serial))
                 _kv(doc, "    Время подписания",
                     s.created_at.strftime("%d.%m.%Y %H:%M:%S UTC")

@@ -538,6 +538,43 @@ export default function EnrollmentDetailPage() {
             </Section>
           )}
 
+          {(() => {
+            const collegeSigs = (item.signatures || []).filter((s) => s.signer_party === "college");
+            if (collegeSigs.length === 0) return null;
+            const orgName = collegeInfo?.college_name || "Каспийский общественный университет";
+            const orgBin = collegeInfo?.college_bin || "";
+            const orgAddr = collegeInfo?.college_address || "";
+            const basis = collegeInfo?.director_basis || "";
+            const director = collegeSigs[0].signer_full_name || "—";
+            return (
+              <Section
+                title="Подпись организации"
+                extra={<span className="badge bg-emerald-100 text-emerald-700">✓ ЭЦП колледжа</span>}
+              >
+                <div className="rounded-2xl bg-gradient-to-br from-coral-50 to-white ring-2 ring-coral-200 p-4 relative">
+                  <div className="absolute top-3 right-3 rotate-[8deg] border-2 border-emerald-500 text-emerald-600 text-[10px] font-bold uppercase tracking-wider rounded px-2 py-1 opacity-80 select-none">
+                    Подписано ЭЦП
+                  </div>
+                  <div className="text-[10px] uppercase tracking-wider font-bold text-coral-700 mb-1">Организация</div>
+                  <div className="font-bold text-sm text-charcoal-700">{orgName}</div>
+                  {orgBin && <div className="text-[11px] text-charcoal-500 mt-0.5">БИН {orgBin}</div>}
+                  {orgAddr && <div className="text-[11px] text-charcoal-500">{orgAddr}</div>}
+                  <div className="border-t border-coral-200 mt-3 pt-3">
+                    <div className="text-[10px] uppercase tracking-wider font-bold text-coral-700 mb-1">Директор</div>
+                    <div className="font-semibold text-sm text-charcoal-700">{director}</div>
+                    {basis && <div className="text-[11px] text-charcoal-500 mt-0.5">Действует на основании: {basis}</div>}
+                  </div>
+                  <div className="border-t border-coral-200 mt-3 pt-3 text-[11px] text-charcoal-600">
+                    Подписал документ(ов): <b>{collegeSigs.length}</b> из <b>{(matrix.college || []).length}</b>
+                    {collegeSigs.length > 0 && collegeSigs[0].created_at && (
+                      <> · последняя подпись: {formatDateTime(collegeSigs[collegeSigs.length - 1].created_at)}</>
+                    )}
+                  </div>
+                </div>
+              </Section>
+            );
+          })()}
+
           <Section
             title={`Подписи (${(item.signatures || []).length})`}
             extra={
