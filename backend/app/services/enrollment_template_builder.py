@@ -294,7 +294,23 @@ def _build_from_source(source_path: Path, fills: list[tuple], expected: int,
         )
     if post_process is not None:
         post_process(doc)
-    doc.save(str(out_path))
+    # Atomic write: save to a temp path in the same directory, then rename onto
+    # the target. Guarantees a concurrent Flask worker never sees a half-written
+    # .docx (python-docx does a streaming ZIP write, so an interrupted save
+    # leaves a corrupt archive — docxtpl then raises on next render). The
+    # rename() is atomic within a filesystem, so worker A reads the OLD file
+    # in full, worker B reads the NEW file in full — never a partial one.
+    out_path = Path(out_path)
+    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    try:
+        doc.save(str(tmp_path))
+        tmp_path.replace(out_path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
     return out_path
 
 
@@ -461,7 +477,17 @@ def build_consent_template(path: str | Path) -> Path:
     _p(doc, "Согласна (согласен) ____________________ (подпись законного представителя) / {{ parent.full_name }}")
     _p(doc, "Дата ____________")
 
-    doc.save(path)
+    # Atomic write — see the note in _build_from_source for the rationale.
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        doc.save(str(tmp_path))
+        tmp_path.replace(path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
     return path
 
 

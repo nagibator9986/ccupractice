@@ -597,6 +597,8 @@ export default function EnrollmentDetailPage() {
             const certName = collegeSigs[0].signer_full_name || "";
             const director = collegeInfo?.director_full_name
               || (collegeInfoLoaded ? (certName || "—") : "…");
+            const orgUsingCertFallback =
+              !collegeInfo?.director_full_name && collegeInfoLoaded && !!certName;
             return (
               <Section
                 title="Подпись организации"
@@ -614,6 +616,12 @@ export default function EnrollmentDetailPage() {
                     <div className="text-[10px] uppercase tracking-wider font-bold text-coral-700 mb-1">Директор</div>
                     <div className="font-semibold text-sm text-charcoal-700">{director}</div>
                     {basis && <div className="text-[11px] text-charcoal-500 mt-0.5">Действует на основании: {basis}</div>}
+                    {orgUsingCertFallback && (
+                      <div className="text-[10px] text-amber-700 italic mt-1"
+                           title="ФИО директора не задано в настройках — отображается CN ЭЦП-сертификата.">
+                        ⚠ ФИО подтянуто из ЭЦП. Заполните в <Link to="/settings" className="underline">Настройках колледжа</Link>.
+                      </div>
+                    )}
                   </div>
                   <div className="border-t border-coral-200 mt-3 pt-3 text-[11px] text-charcoal-600">
                     Подписал документ(ов): <b>{collegeSigs.length}</b> из <b>{(matrix.college || []).length}</b>
@@ -664,6 +672,19 @@ export default function EnrollmentDetailPage() {
                   const isStillLoadingCollege = isCollege && !collegeInfoLoaded;
                   const displayName = authoritativeName
                     || (isStillLoadingCollege ? "…" : (certName || "—"));
+                  // Warn when the authoritative record is empty and we're
+                  // falling back to the cert CN — Kazakh ЭЦП CNs commonly
+                  // carry only фамилия+отчество, so the fallback looks
+                  // incomplete. Tell the admin exactly where to fill it.
+                  const usingCertFallback =
+                    !authoritativeName && !isStillLoadingCollege && !!certName;
+                  const whereToFill = isCollege
+                    ? "Настройки колледжа → «ФИО директора»"
+                    : isParent
+                      ? "форма договора → «Родитель → ФИО»"
+                      : isStudent
+                        ? "форма договора → «Абитуриент → ФИО»"
+                        : "";
                   return (
                     <li key={s.id} className="rounded-xl bg-white ring-1 ring-charcoal-100 p-3 shadow-sm">
                       <div className="flex items-center justify-between gap-2 mb-2">
@@ -688,6 +709,12 @@ export default function EnrollmentDetailPage() {
                         </div>
                         <div className="font-medium">{displayName}</div>
                         <div className="text-[11px] text-charcoal-500">ИИН: {s.signer_iin_or_bin || "—"}</div>
+                        {usingCertFallback && whereToFill && (
+                          <div className="text-[10px] text-amber-700 italic mt-1"
+                               title="ФИО может быть неполным — CN сертификата ЭЦП обычно содержит только фамилию и отчество.">
+                            ⚠ ФИО подтянуто из ЭЦП. Заполните: {whereToFill}
+                          </div>
+                        )}
                       </div>
                       <div className="mt-2 text-[11px] text-charcoal-400">
                         {formatDateTime(s.created_at)}

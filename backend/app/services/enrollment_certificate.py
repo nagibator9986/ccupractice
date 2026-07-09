@@ -234,12 +234,23 @@ def generate_signature_certificate(
                     authoritative_name = (
                         (college.director_full_name if college else "") or ""
                     )
+                    where_to_fill = "Настройки колледжа → «ФИО директора»"
                 elif is_parent:
                     authoritative_name = e.parent_full_name or ""
+                    where_to_fill = "форма договора → «Родитель → ФИО»"
                 elif is_student:
                     authoritative_name = e.applicant_full_name or ""
+                    where_to_fill = "форма договора → «Абитуриент → ФИО»"
                 else:
                     authoritative_name = ""
+                    where_to_fill = ""
+                # When the authoritative record is empty we fall back to the
+                # cert CN — but Kazakh ЭЦП CNs typically carry only фамилия +
+                # отчество (no given name), so the display looks incomplete.
+                # Track the fallback so we can surface a "заполните ФИО …"
+                # hint below the line — otherwise the reader has no way to
+                # know the incomplete name is a data-entry gap, not a bug.
+                using_cert_fallback = not authoritative_name
                 display_name = authoritative_name or (s.signer_full_name or "—")
 
                 if is_college:
@@ -256,6 +267,16 @@ def generate_signature_certificate(
                         _kv(doc, "    Действует на основании", college_basis)
                 else:
                     _kv(doc, "    Подписант", display_name, bold_value=True)
+
+                if using_cert_fallback and s.signer_full_name and where_to_fill:
+                    # Small italic warning — puts the incomplete name in context
+                    # and tells the admin exactly where to fill the missing ФИО.
+                    _p(
+                        doc,
+                        f"    ⚠ ФИО подтянуто из ЭЦП-сертификата (может быть неполным). "
+                        f"Заполните: {where_to_fill}.",
+                        size=9, color=_BRAND_CHARCOAL, italic=True,
+                    )
 
                 # CN row intentionally suppressed — it caused repeated user
                 # confusion ("это не полное ФИО!"). The CN is what's LITERALLY
