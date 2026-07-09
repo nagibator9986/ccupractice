@@ -257,19 +257,16 @@ def generate_signature_certificate(
                 else:
                     _kv(doc, "    Подписант", display_name, bold_value=True)
 
-                # ЭЦП certificate's own identity — audit line, shown only when
-                # the CN is materially different from the authoritative name.
-                # Casefold + NFKC-normalized whitespace so a trailing space /
-                # NBSP flip doesn't spuriously trigger the "differs" branch.
-                cert_cn = (s.signer_full_name or "").strip()
-                def _norm_ru(v: str) -> str:
-                    import unicodedata as _u
-                    return " ".join(_u.normalize("NFKC", v).split()).casefold()
-                if (
-                    cert_cn
-                    and _norm_ru(cert_cn) != _norm_ru(display_name)
-                ):
-                    _kv(doc, "    CN сертификата ЭЦП", cert_cn)
+                # CN row intentionally suppressed — it caused repeated user
+                # confusion ("это не полное ФИО!"). The CN is what's LITERALLY
+                # baked into the ЭЦП by НУЦ РК at issuance and can't be
+                # rewritten (Kazakh certs commonly carry only given-name +
+                # patronymic). The authoritative full ФИО is already surfaced
+                # as "Директор:" / "Подписант:" above, which is what actually
+                # matters for a reader. The cert's identity is still fully
+                # preserved in the DB (signer_full_name column) and available
+                # to a verifier via the /verify/<code> page + the SHA-256
+                # payload binding — legal auditability is intact.
 
                 # The number in `signer_iin_or_bin` can be an ИИН (personal cert
                 # — common for parent / student / director) or a БИН (org cert)

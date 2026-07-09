@@ -597,10 +597,6 @@ export default function EnrollmentDetailPage() {
             const certName = collegeSigs[0].signer_full_name || "";
             const director = collegeInfo?.director_full_name
               || (collegeInfoLoaded ? (certName || "—") : "…");
-            const showCertName =
-              collegeInfoLoaded
-              && certName
-              && normFio(certName) !== normFio(collegeInfo?.director_full_name);
             return (
               <Section
                 title="Подпись организации"
@@ -618,11 +614,6 @@ export default function EnrollmentDetailPage() {
                     <div className="text-[10px] uppercase tracking-wider font-bold text-coral-700 mb-1">Директор</div>
                     <div className="font-semibold text-sm text-charcoal-700">{director}</div>
                     {basis && <div className="text-[11px] text-charcoal-500 mt-0.5">Действует на основании: {basis}</div>}
-                    {showCertName && (
-                      <div className="text-[10px] text-charcoal-400 mt-1" title="Как записано в CN ЭЦП-сертификата. Отображается только для аудита.">
-                        CN сертификата ЭЦП: {certName}
-                      </div>
-                    )}
                   </div>
                   <div className="border-t border-coral-200 mt-3 pt-3 text-[11px] text-charcoal-600">
                     Подписал документ(ов): <b>{collegeSigs.length}</b> из <b>{(matrix.college || []).length}</b>
@@ -673,10 +664,6 @@ export default function EnrollmentDetailPage() {
                   const isStillLoadingCollege = isCollege && !collegeInfoLoaded;
                   const displayName = authoritativeName
                     || (isStillLoadingCollege ? "…" : (certName || "—"));
-                  const showCertFallback =
-                    !isStillLoadingCollege
-                    && certName
-                    && normFio(certName) !== normFio(authoritativeName);
                   return (
                     <li key={s.id} className="rounded-xl bg-white ring-1 ring-charcoal-100 p-3 shadow-sm">
                       <div className="flex items-center justify-between gap-2 mb-2">
@@ -701,11 +688,6 @@ export default function EnrollmentDetailPage() {
                         </div>
                         <div className="font-medium">{displayName}</div>
                         <div className="text-[11px] text-charcoal-500">ИИН: {s.signer_iin_or_bin || "—"}</div>
-                        {showCertFallback && (
-                          <div className="text-[10px] text-charcoal-400 mt-0.5" title="Как записано в CN ЭЦП-сертификата. Только для аудита.">
-                            CN сертификата ЭЦП: {certName}
-                          </div>
-                        )}
                       </div>
                       <div className="mt-2 text-[11px] text-charcoal-400">
                         {formatDateTime(s.created_at)}
