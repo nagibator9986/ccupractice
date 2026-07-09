@@ -26,10 +26,11 @@ from pathlib import Path
 from docx import Document
 from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
 
 # Bump the filename to force regeneration when the injection logic changes
 # (ensure_enrollment_templates only builds a file that doesn't already exist).
-CONTRACT_FILENAME = "contract_enrollment_template_v3.docx"
+CONTRACT_FILENAME = "contract_enrollment_template_v4.docx"
 LMS_FILENAME = "contract_lms_template_v1.docx"
 # v4: rebuilt from scratch to match the official College of Caspian University
 # consent form wording word-for-word (was previously producing a shortened
@@ -80,6 +81,114 @@ def _fill_paragraph(paragraph, tags_by_occ: dict[int, str]) -> int:
         out.append(text[last:])
         run.text = "".join(out)
     return replaced
+
+
+def _make_para(text: str):
+    """Build a bare <w:p><w:r><w:t>text</w:t></w:r></w:p> OXML element.
+
+    Used to inject docxtpl paragraph-level control markers (``{%p ... %}``)
+    around already-existing template paragraphs. Docxtpl requires each
+    control tag to sit on ITS OWN paragraph — otherwise it's parsed as an
+    inline statement tag and the surrounding paragraph is kept regardless.
+    """
+    p = OxmlElement("w:p")
+    r = OxmlElement("w:r")
+    t = OxmlElement("w:t")
+    t.text = text
+    # xml:space="preserve" so leading/trailing whitespace survives a save
+    t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+    r.append(t)
+    p.append(r)
+    return p
+
+
+def _insert_before(paragraph, text: str) -> None:
+    paragraph._element.addprevious(_make_para(text))
+
+
+def _insert_after(paragraph, text: str) -> None:
+    paragraph._element.addnext(_make_para(text))
+
+
+def _find_para(cell, prefix: str):
+    """Find the first paragraph in `cell` whose text starts with `prefix`."""
+    for p in cell.paragraphs:
+        if p.text.strip().startswith(prefix):
+            return p
+    return None
+
+
+def _wrap_payment_sections(doc: Document) -> int:
+    """Wrap sections 4.2 (9 класс) and 4.3 (11 класс / курсы 2-4) of the
+    education-services contract with docxtpl conditional markers, so the
+    rendered document shows only the ONE applicable payment schedule
+    instead of both statically.
+
+    Applies to BOTH language columns of row 16 (the "РАЗМЕР И ПОРЯДОК
+    ОПЛАТЫ" section) — coordinates verified against source_contract_edu.docx.
+
+    Business rule (embedded in the document's own text):
+      * 4.2 applies when the student came AFTER 9 CLASS and is on 1st year;
+      * 4.3 applies for 1st year students AFTER 11 CLASS AND for every
+        2nd/3rd/4th year student regardless of base.
+
+    Context flag ``is_after_9_first_course`` (bool) drives the branching;
+    see ``_build_context`` in enrollment_documents.py.
+
+    Returns the number of section boundaries actually wrapped (should be 4:
+    open+close for 4.2 and 4.3 in each of KZ+RU = 8 markers = 4 sections).
+    Raises RuntimeError if fewer boundaries were found, so a source-file
+    drift fails loudly at build time.
+    """
+    table = doc.tables[0]
+    row16 = table.rows[16]
+    kz_cell = row16.cells[0]
+    ru_cell = row16.cells[1]
+
+    # Header + terminal-line matchers for each section. The header substring
+    # is the shortest prefix that uniquely identifies the section within the
+    # cell; the "last-line" matcher is the last bullet before the next section.
+    sections = {
+        "kz_42": {
+            "cell": kz_cell,
+            "start_prefix": "1 (бірінші) курстың оқу ақысы (негізгі орта білім (9 сынып)",
+            "end_prefix":   "ағымдағы оқу жылының 10 мамырға дейін",
+            "cond": "is_after_9_first_course",
+        },
+        "kz_43": {
+            "cell": kz_cell,
+            "start_prefix": "1 (бірінші) жалпы орта білім базасында (11 сынып)",
+            "end_prefix":   "ағымдағы оқу жылының 10 наурызға дейін",
+            "cond": "not is_after_9_first_course",
+        },
+        "ru_42": {
+            "cell": ru_cell,
+            "start_prefix": "Оплата за 1 (первый) курс обучения на базе основного среднего",
+            "end_prefix":   "до 10 мая текущего учебного года",
+            "cond": "is_after_9_first_course",
+        },
+        "ru_43": {
+            "cell": ru_cell,
+            "start_prefix": "Оплата за 1 (первый) на базе общего среднего",
+            "end_prefix":   "до 10 марта текущего учебного года",
+            "cond": "not is_after_9_first_course",
+        },
+    }
+
+    wrapped = 0
+    for key, spec in sections.items():
+        start = _find_para(spec["cell"], spec["start_prefix"])
+        end = _find_para(spec["cell"], spec["end_prefix"])
+        if start is None or end is None:
+            raise RuntimeError(
+                f"Payment-section wrap: could not locate {key} boundaries "
+                f"(start_found={start is not None}, end_found={end is not None}). "
+                "The source contract layout has drifted; re-verify prefixes."
+            )
+        _insert_before(start, "{%p if " + spec["cond"] + " %}")
+        _insert_after(end, "{%p endif %}")
+        wrapped += 1
+    return wrapped
 
 
 def _apply_fills(doc: Document, fills: list[tuple]) -> int:
@@ -173,7 +282,8 @@ _LMS_EXPECTED = sum(len(t) for *_, t in LMS_FILLS)
 
 
 def _build_from_source(source_path: Path, fills: list[tuple], expected: int,
-                       out_path: Path) -> Path:
+                       out_path: Path,
+                       post_process=None) -> Path:
     doc = Document(str(source_path))
     replaced = _apply_fills(doc, fills)
     if replaced != expected:
@@ -182,13 +292,22 @@ def _build_from_source(source_path: Path, fills: list[tuple], expected: int,
             f"replaced {replaced} fields, expected {expected}. "
             "The source .docx layout changed — re-verify the fill map."
         )
+    if post_process is not None:
+        post_process(doc)
     doc.save(str(out_path))
     return out_path
 
 
 def build_contract_template(out_path: str | Path, source_dir: str | Path) -> Path:
     source = Path(source_dir) / SOURCE_CONTRACT
-    return _build_from_source(source, EDU_FILLS, _EDU_EXPECTED, Path(out_path))
+    # Wrap sections 4.2 / 4.3 in docxtpl conditionals so the rendered
+    # document shows only the applicable payment schedule (base=9+course=1
+    # → 4.2, otherwise 4.3). Fills are applied first because the wrapper
+    # can't rely on paragraph indices after new markers are injected.
+    return _build_from_source(
+        source, EDU_FILLS, _EDU_EXPECTED, Path(out_path),
+        post_process=_wrap_payment_sections,
+    )
 
 
 def build_lms_template(out_path: str | Path, source_dir: str | Path) -> Path:
@@ -382,9 +501,27 @@ def ensure_enrollment_templates(templates_dir: str | Path) -> dict:
                 pass
     build_consent_template(consent)
 
-    if not contract.exists():
+    # Contract + LMS: always rebuild too. Both depend on source .docx files
+    # that ship with the code, but the built template file itself is a
+    # derivative that has already been bitten by the "stale on Railway
+    # volume" failure mode (see the consent history above). Cheap to rebuild
+    # (~milliseconds via python-docx), so no reason to skip.
+    for stale in templates_dir.glob("contract_enrollment_template_v*.docx"):
+        if stale.resolve() != contract.resolve():
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+    if (source_dir / SOURCE_CONTRACT).is_file():
         build_contract_template(contract, source_dir)
-    if not lms.exists():
+
+    for stale in templates_dir.glob("contract_lms_template_v*.docx"):
+        if stale.resolve() != lms.resolve():
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+    if (source_dir / SOURCE_LMS).is_file():
         build_lms_template(lms, source_dir)
 
     return {"contract": contract, "lms": lms, "consent": consent}

@@ -9,13 +9,16 @@ backend/archive/
 backend/uploads/
 backend/.env
 
-# The consent template is rebuilt (and stale versions swept) on every
+# All enrollment templates are rebuilt (and stale versions swept) on every
 # ensure_enrollment_templates() call — see backend/app/services/
-# enrollment_template_builder.py. Committing a copy is a foot-gun: the file
-# gets silently unlinked at runtime on the first startup and can shadow the
-# current builder on any deploy that races the sweep. Contracts stay tracked
-# (they depend on templates_docx/source/*.docx and are `if not exists` builds).
+# enrollment_template_builder.py. Committing them is a foot-gun: the built
+# files get silently unlinked at runtime on the first startup and can shadow
+# the current builder on any deploy that races the sweep. The SOURCE .docx
+# files under templates_docx/source/ stay tracked — they're the input, not
+# the derivative.
 backend/templates_docx/consent_template_v*.docx
+backend/templates_docx/contract_enrollment_template_v*.docx
+backend/templates_docx/contract_lms_template_v*.docx
 
 # Node
 frontend/node_modules/
