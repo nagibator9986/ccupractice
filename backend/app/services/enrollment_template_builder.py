@@ -31,11 +31,14 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 # (ensure_enrollment_templates only builds a file that doesn't already exist).
 CONTRACT_FILENAME = "contract_enrollment_template_v3.docx"
 LMS_FILENAME = "contract_lms_template_v1.docx"
-# Bumped to v3: on production a stale v2 file with hardcoded underscore
-# fields (no {{ jinja }} placeholders) was persisting on the deployed
-# volume, so every re-render produced an empty consent. A fresh filename
-# forces ``ensure_enrollment_templates`` to rebuild it from source.
-CONSENT_FILENAME = "consent_template_v3.docx"
+# v4: rebuilt from scratch to match the official College of Caspian University
+# consent form wording word-for-word (was previously producing a shortened
+# variant that lacked "рекламных целях / потенциальным работодателям /
+# составления соответствующего письменного документа" phrases). The consent
+# is now ALSO rebuilt on every ensure_enrollment_templates call — see the
+# note in that function — because a stale file on the deployed volume kept
+# masking earlier fixes even after the filename was bumped.
+CONSENT_FILENAME = "consent_template_v4.docx"
 
 SOURCE_DIRNAME = "source"
 SOURCE_CONTRACT = "source_contract_edu.docx"
@@ -236,67 +239,98 @@ def _p(doc, text, *, bold=False, align=WD_ALIGN_PARAGRAPH.JUSTIFY, size=11):
 
 
 def build_consent_template(path: str | Path) -> Path:
+    """Programmatically build the personal-data consent template.
+
+    Wording is the OFFICIAL College of Caspian University consent form —
+    matches the printed original word-for-word so the legal fidelity of the
+    document is preserved. Underscore fill-in placeholders from the printed
+    form are replaced with docxtpl ``{{ jinja }}`` tags that get filled from
+    the enrollment record at generation time.
+    """
     path = Path(path)
     doc = _doc()
 
     _h(doc, "СОГЛАСИЕ")
     _h(doc, "на сбор и обработку персональных данных", size=12)
 
+    # ── Preamble — age-aware. Uses the official form's wording exactly. ─────
     _ctrl(doc, "{%p if applicant.is_minor %}")
     _p(
         doc,
-        "Я, несовершеннолетний(-яя) {{ applicant.full_name }} (ФИО), дата рождения "
-        "{{ applicant.birth_date }}, {{ applicant.id_doc_type }} номер {{ applicant.id_doc_number }}, "
-        "выданное {{ applicant.id_doc_issued_by }} (кем и когда), зарегистрированный(-ая) по адресу: "
-        "{{ applicant.address }} (далее — «Обучающийся»), действующий(-ая) с согласия законного "
-        "представителя {{ parent.full_name }} (ФИО), удостоверение личности номер "
-        "{{ parent.id_doc_number }}, выданное {{ parent.id_doc_issued_by }} (кем и когда), "
-        "зарегистрированный(-ая) по адресу: {{ parent.address }},",
+        "Я, несовершеннолетний(-яя) {{ applicant.full_name }} (ФИО), "
+        "дата рождения {{ applicant.birth_date }} удостоверение личности/свидетельство о рождении "
+        "номер {{ applicant.id_doc_number }}, выданное {{ applicant.id_doc_issued_by }} "
+        "(кем и когда), зарегистрированный(-ая) по адресу: {{ applicant.address }} "
+        "(далее – «Обучающийся»), действующий(-ая) с согласия законного представителя "
+        "{{ parent.full_name }} (ФИО) удостоверение личности: номер {{ parent.id_doc_number }}, "
+        "выданное {{ parent.id_doc_issued_by }} (кем и когда), зарегистрированный по адресу: "
+        "{{ parent.address }},",
     )
     _ctrl(doc, "{%p else %}")
     _p(
         doc,
-        "Я, {{ applicant.full_name }} (ФИО), дата рождения {{ applicant.birth_date }}, "
-        "{{ applicant.id_doc_type }} номер {{ applicant.id_doc_number }}, выданное "
+        "Я, {{ applicant.full_name }} (ФИО), дата рождения {{ applicant.birth_date }} "
+        "удостоверение личности номер {{ applicant.id_doc_number }}, выданное "
         "{{ applicant.id_doc_issued_by }} (кем и когда), зарегистрированный(-ая) по адресу: "
-        "{{ applicant.address }} (далее — «Обучающийся»),",
+        "{{ applicant.address }} (далее – «Обучающийся»),",
     )
     _ctrl(doc, "{%p endif %}")
+
+    # ── Operator + processing scope — matches the official form's wording ──
     _p(
         doc,
-        "даю согласие оператору — Учреждению образования «{{ college.name_ru }}», "
-        "БИН {{ college.bin }}, адрес: {{ college.address }}, на сбор и обработку, включая, "
-        "но не ограничиваясь: систематизацию, накопление, хранение, уточнение (обновление, изменение, "
-        "дополнение), использование, обезличивание, блокирование, уничтожение, передачу другим лицам "
-        "следующих персональных данных:",
+        "даю согласие оператору – Учреждению Образования «{{ college.name_ru }}» "
+        "БИН {{ college.bin }}, адрес: {{ college.address }} на сбор и обработку, "
+        "включая, но не ограничиваясь: на систематизацию, накопление, хранение, "
+        "уточнение (обновление, изменение, дополнение), использование, обезличивание, "
+        "блокирование, уничтожение, передачу другим лицам следующих персональных данных:",
+        bold=True,
     )
     for item in [
-        "Фамилия / Имя / Отчество.",
+        "Фамилия/Имя/Отчество.",
         "ИИН.",
         "Дата рождения.",
         "Пол.",
         "Номер мобильного телефона.",
         "Адрес электронной почты (email).",
     ]:
-        _p(doc, "— " + item)
+        p = doc.add_paragraph(style="List Bullet")
+        r = p.add_run(item)
+        r.font.size = Pt(11)
+        r.font.name = "Times New Roman"
+
+    # ── Purpose — verbatim from the official form ──────────────────────────
     _p(
         doc,
-        "Цель сбора и обработки: предоставление Обучающемуся и/или его законным представителям "
-        "информации о текущей успеваемости в электронном формате, обеспечение процессов оказания "
-        "государственных услуг в электронном виде в сфере образования, сбор обезличенных данных по "
-        "успеваемости для статистических исследований, ведение статистики и учёта.",
+        "\tЦель сбора и обработки: предоставление Обучающемуся и/или его "
+        "Законным представителям, сотрудникам организаций системы образования "
+        "информации о текущей успеваемости Обучающегося в образовательной "
+        "организации в электронном формате, обеспечение процессов оказания "
+        "государственных услуг в электронном виде в сфере образования, сбор "
+        "обезличенных данных по успеваемости для статистических исследований, "
+        "использование данных в рекламных целях, передачу данных потенциальным "
+        "работодателям, а также для ведения статистики и учета.",
     )
     _p(
         doc,
-        "Настоящее согласие действует на весь период обучения Обучающегося в указанной "
-        "образовательной организации до момента выпуска, исключения или перевода в другую "
+        "\tНастоящее согласие в отношении сбора и обработки указанных данных "
+        "действует на весь период обучения Обучающегося в указанной образовательной "
+        "организации до момента выпуска, исключения, перевода в другую "
         "образовательную организацию.",
     )
     _p(
         doc,
-        "Даю согласие на хранение указанных персональных данных в архивах Оператора в течение срока, "
-        "установленного законодательством Республики Казахстан. Осведомлён(-а) о праве отозвать "
-        "согласие посредством письменного документа, направленного Оператору.",
+        "\tДаю свое согласие на хранение указанных персональных данных в "
+        "соответствующих архивах Оператора в течение срока, установленного "
+        "законодательством Республики Казахстан.",
+    )
+    _p(
+        doc,
+        "\tОсведомлен(а) о праве отозвать свое согласие посредством составления "
+        "соответствующего письменного документа, который может быть направлен мной "
+        "на адрес образовательной организации по почте заказным письмом с уведомлением "
+        "о вручении, либо вручен лично под расписку представителю образовательной "
+        "организации.",
     )
 
     _p(doc, " ")
@@ -305,7 +339,7 @@ def build_consent_template(path: str | Path) -> Path:
     _ctrl(doc, "{%p else %}")
     _p(doc, "Подпись Обучающегося: ____________________ / {{ applicant.full_name }}")
     _ctrl(doc, "{%p endif %}")
-    _p(doc, "Согласен(-на): ____________________ / {{ parent.full_name }} (подпись законного представителя)")
+    _p(doc, "Согласна (согласен) ____________________ (подпись законного представителя) / {{ parent.full_name }}")
     _p(doc, "Дата ____________")
 
     doc.save(path)
@@ -319,6 +353,15 @@ def ensure_enrollment_templates(templates_dir: str | Path) -> dict:
 
     Sources live in ``templates_dir/source/``. The bilingual contracts are
     injected from those sources; the consent is generated programmatically.
+
+    IMPORTANT: the consent template is ALWAYS rebuilt on every call because
+    it is fully programmatic (no source .docx dependency, cheap to build)
+    and we've been bitten by stale files persisting on Railway's volume
+    across deploys — a filename bump doesn't help if any variant of the
+    file is already sitting on disk. Rebuilding on every generate call
+    guarantees the deployed code is the single source of truth for consent
+    layout + Jinja tags. Contracts stay build-once because they depend on
+    a source .docx that ships with the code.
     """
     templates_dir = Path(templates_dir)
     templates_dir.mkdir(parents=True, exist_ok=True)
@@ -328,11 +371,20 @@ def ensure_enrollment_templates(templates_dir: str | Path) -> dict:
     lms = templates_dir / LMS_FILENAME
     consent = templates_dir / CONSENT_FILENAME
 
+    # Build CONSENT first — it has no source-file dependency and is cheap to
+    # rebuild. Sweep any older-version consent files so a stale template that
+    # persisted through past deploys can't shadow the current one.
+    for stale in templates_dir.glob("consent_template_v*.docx"):
+        if stale.resolve() != consent.resolve():
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+    build_consent_template(consent)
+
     if not contract.exists():
         build_contract_template(contract, source_dir)
     if not lms.exists():
         build_lms_template(lms, source_dir)
-    if not consent.exists():
-        build_consent_template(consent)
 
     return {"contract": contract, "lms": lms, "consent": consent}
