@@ -25,7 +25,7 @@ SAFETY GUARANTEES
 from __future__ import annotations
 
 import io
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from docx import Document
@@ -209,7 +209,12 @@ def generate_signature_certificate(
             if not sigs:
                 _p(doc, "  Подписей нет.", size=10, color=_BRAND_CHARCOAL, italic=True)
                 continue
-            for j, s in enumerate(sorted(sigs, key=lambda x: x.created_at or 0)):
+            # Homogeneous sort key — mixing datetime with `0` fallback used to
+            # raise TypeError when any row had created_at=None (older backfill
+            # or an explicit-NULL insert).
+            for j, s in enumerate(
+                sorted(sigs, key=lambda x: (x.created_at is None, x.created_at or datetime.min))
+            ):
                 is_college = s.signer_party == PARTY_COLLEGE
                 party_label = PARTY_LABELS.get(s.signer_party, s.signer_party)
                 _p(doc, f"  Подпись №{j + 1} — {party_label}", size=11, bold=True,
@@ -242,9 +247,20 @@ def generate_signature_certificate(
                     # carry a shortened CN (given name + patronymic only) — the
                     # label makes clear this is what's LITERALLY in the ЭЦП, not
                     # a mismatch bug on our side.
-                    if s.signer_full_name and s.signer_full_name.strip().casefold() != director_from_settings.strip().casefold():
+                    # Compare against what was actually rendered (display_director)
+                    # so a fallback-to-cert-CN doesn't cause the CN line to
+                    # redundantly reprint the same string a second time (which
+                    # happened when settings.director_full_name was empty).
+                    if (
+                        s.signer_full_name
+                        and s.signer_full_name.strip().casefold()
+                            != (display_director or "").strip().casefold()
+                    ):
                         _kv(doc, "    CN сертификата ЭЦП (как в НУЦ РК)", s.signer_full_name)
-                    _kv(doc, "    ИИН подписанта (по сертификату)", _mask_iin(s.signer_iin_or_bin))
+                    # The number in `signer_iin_or_bin` can be either an ИИН
+                    # (personal director cert — common) or a БИН (org cert) —
+                    # the DB column is polymorphic, so the label is too.
+                    _kv(doc, "    ИИН/БИН подписанта (по сертификату)", _mask_iin(s.signer_iin_or_bin))
                 else:
                     _kv(doc, "    Подписант", s.signer_full_name or "—", bold_value=True)
                     _kv(doc, "    ИИН (скрыт)", _mask_iin(s.signer_iin_or_bin))
@@ -315,6 +331,15 @@ def generate_signature_certificate(
     doc.add_paragraph()
 
     doc.save(str(docx_full))
+    # Match the invariant used by enrollment_documents: remove any prior-
+    # generation PDF so a failed / partial soffice conversion cannot silently
+    # surface a stale certificate to the admin (the download endpoint
+    # prefers pdf-if-present, else falls back to docx).
+    try:
+        if pdf_full.is_file():
+            pdf_full.unlink()
+    except OSError:
+        pass
     produced_pdf = _convert_to_pdf(docx_full)
     return docx_full, produced_pdf
 

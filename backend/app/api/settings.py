@@ -14,7 +14,8 @@ bp = Blueprint("settings", __name__)
 
 _FIELD_LIMITS = {
     "name_ru": 300, "name_kz": 300, "director_full_name": 200,
-    "director_basis": 200, "address": 300, "bin": 20, "iik": 40,
+    "director_basis": 200, "director_iin": 20,
+    "address": 300, "bin": 20, "iik": 40,
     "bank_name": 200, "bank_address": 200, "bank_bik": 40,
     "email": 160, "phone": 60, "city": 80, "contract_prefix": 10,
 }

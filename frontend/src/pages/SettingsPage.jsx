@@ -97,6 +97,7 @@ export default function SettingsPage() {
             <TextField label="Наименование (қаз.)" value={data.name_kz} onChange={(v) => setData({ ...data, name_kz: v })} />
             <TextField label="ФИО директора" value={data.director_full_name} onChange={(v) => setData({ ...data, director_full_name: v })} />
             <TextField label="На основании" value={data.director_basis} onChange={(v) => setData({ ...data, director_basis: v })} />
+            <TextField label="ИИН директора (для ЭЦП)" value={data.director_iin || ""} onChange={(v) => setData({ ...data, director_iin: v })} hint="Личный ИИН — если директор подписывает личной ЭЦП, а не орг-сертификатом. Устраняет ложные предупреждения." />
             <TextField label="Адрес" value={data.address} onChange={(v) => setData({ ...data, address: v })} />
             <TextField label="Город" value={data.city} onChange={(v) => setData({ ...data, city: v })} />
             <TextField label="БИН" value={data.bin} onChange={(v) => setData({ ...data, bin: v })} />

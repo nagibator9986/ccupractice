@@ -11,6 +11,18 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { StatusPill, whoSigns } from "./EnrollmentsPage.jsx";
 import { signBase64WithNCALayer, pingNCALayer } from "../utils/ncalayer.js";
 
+// Compare two ФИО strings semantically — collapse any whitespace run (including
+// non-breaking spaces from ЭЦП CNs), NFKC-normalize, casefold. Used to decide
+// whether to hide the "CN сертификата ЭЦП" audit line when it matches the
+// director ФИО from settings — the raw NCALayer CN often carries NBSP that
+// would spuriously trigger the fallback line if compared naively.
+const normFio = (v) =>
+  (v || "")
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase("ru");
+
 const EDITABLE = [
   "number", "contract_date",
   "applicant_full_name", "applicant_iin", "applicant_birth_date", "applicant_gender",
@@ -46,6 +58,10 @@ export default function EnrollmentDetailPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [collegeInfo, setCollegeInfo] = useState(null);
+  // Distinguishes "still loading" (null) from "loaded, but settings blank"
+  // ({} with empty fields) so college fallback fields don't flash cert-CN
+  // between mount and the /college-info response arriving.
+  const [collegeInfoLoaded, setCollegeInfoLoaded] = useState(false);
   const [ncaAvailable, setNcaAvailable] = useState(null);
   const [collegeSigning, setCollegeSigning] = useState(false);
 
@@ -93,13 +109,21 @@ export default function EnrollmentDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  useEffect(() => {
+  const loadCollegeInfo = useCallback(async () => {
     if (!isAdmin) return;
-    enrollmentsApi
-      .collegeInfo(id)
-      .then((info) => setCollegeInfo(info))
-      .catch(() => {/* section will show a hint about missing college settings */});
+    try {
+      const info = await enrollmentsApi.collegeInfo(id);
+      setCollegeInfo(info);
+    } catch {
+      // Sentinel: loaded, but empty/failed — lets the UI show the "settings
+      // incomplete" hint instead of the "still loading" flicker.
+      setCollegeInfo((prev) => prev ?? {});
+    } finally {
+      setCollegeInfoLoaded(true);
+    }
   }, [id, isAdmin]);
+
+  useEffect(() => { loadCollegeInfo(); }, [loadCollegeInfo]);
 
   useEffect(() => {
     if (!isAdmin) return undefined;
@@ -207,6 +231,8 @@ export default function EnrollmentDetailPage() {
     if (collegeSigning) return;
     setCollegeSigning(true);
     const t = toast.loading("Проверка NCALayer…");
+    let signedOk = 0;
+    let failedDoc = null;
     try {
       // Sign every document the college is responsible for and hasn't yet
       // signed. Existing student/parent signatures on those documents are
@@ -223,20 +249,33 @@ export default function EnrollmentDetailPage() {
         return;
       }
       for (const doc of docsToSign) {
-        toast.loading(`Получаем ${item.documents[doc].label}…`, { id: t });
+        failedDoc = item.documents?.[doc]?.label || doc;
+        toast.loading(`Получаем ${failedDoc}…`, { id: t });
         const { payload_base64, document_label } = await enrollmentsApi.collegePayload(id, doc);
         toast.loading(`Откройте NCALayer и подпишите: ${document_label}`, { id: t });
         const cms = await signBase64WithNCALayer(payload_base64);
         toast.loading(`Сохраняем подпись: ${document_label}`, { id: t });
         const res = await enrollmentsApi.collegeSign(id, doc, cms);
         if (res?.warnings?.length) res.warnings.forEach((w) => toast(w, { icon: "⚠️", duration: 6000 }));
+        signedOk += 1;
+        failedDoc = null;
       }
       toast.success(`Колледж подписал: ${docsToSign.length} документ(-а)`, { id: t });
-      await load();
     } catch (e) {
-      toast.error(e.response?.data?.error || e.message || "Ошибка подписания", { id: t });
-      await refresh();
+      const errMsg = e.response?.data?.error || e.message || "Ошибка подписания";
+      if (signedOk > 0) {
+        toast.error(
+          `Подписано ${signedOk}, ошибка на "${failedDoc}": ${errMsg}. Продолжите подписание оставшихся документов.`,
+          { id: t, duration: 8000 },
+        );
+      } else {
+        toast.error(errMsg, { id: t });
+      }
     } finally {
+      // Always refresh — even mid-loop failures leave partial state that the
+      // UI should reflect (the button label will show the remaining count).
+      await load();
+      await loadCollegeInfo();
       setCollegeSigning(false);
     }
   }
@@ -539,22 +578,29 @@ export default function EnrollmentDetailPage() {
           )}
 
           {(() => {
-            const collegeSigs = (item.signatures || []).filter((s) => s.signer_party === "college");
-            if (collegeSigs.length === 0) return null;
+            const collegeSigsRaw = (item.signatures || []).filter((s) => s.signer_party === "college");
+            if (collegeSigsRaw.length === 0) return null;
+            // Explicit sort — the "последняя подпись" tail below indexes the
+            // last element, which is only correct on a sorted array.
+            const collegeSigs = [...collegeSigsRaw].sort(
+              (a, b) => (a.created_at || "").localeCompare(b.created_at || ""),
+            );
             const orgName = collegeInfo?.college_name || "Каспийский общественный университет";
             const orgBin = collegeInfo?.college_bin || "";
             const orgAddr = collegeInfo?.college_address || "";
             const basis = collegeInfo?.director_basis || "";
             // Prefer the authoritative director ФИО from CollegeSettings — the
             // ЭЦП certificate's CN sometimes carries only Kazakh given-name +
-            // patronymic without a surname. Keep the cert name available as a
-            // secondary audit line — casefold-normalized comparison so a
-            // trailing space or case flip on either side doesn't spuriously
-            // trigger the "shows anyway" branch.
+            // patronymic without a surname. While collegeInfo hasn't resolved
+            // yet, show "…" (loading placeholder) instead of flashing the
+            // cert CN then switching to the settings ФИО on next tick.
             const certName = collegeSigs[0].signer_full_name || "";
-            const director = collegeInfo?.director_full_name || certName || "—";
-            const norm = (v) => (v || "").trim().toLocaleLowerCase("ru");
-            const showCertName = certName && norm(certName) !== norm(collegeInfo?.director_full_name);
+            const director = collegeInfo?.director_full_name
+              || (collegeInfoLoaded ? (certName || "—") : "…");
+            const showCertName =
+              collegeInfoLoaded
+              && certName
+              && normFio(certName) !== normFio(collegeInfo?.director_full_name);
             return (
               <Section
                 title="Подпись организации"
@@ -610,10 +656,14 @@ export default function EnrollmentDetailPage() {
                   // additionally show the organization's БИН from settings.
                   const certName = s.signer_full_name || "";
                   const displayName = isCollege
-                    ? (collegeInfo?.director_full_name || certName || "—")
+                    ? (collegeInfo?.director_full_name
+                        || (collegeInfoLoaded ? (certName || "—") : "…"))
                     : (certName || "—");
-                  const _norm = (v) => (v || "").trim().toLocaleLowerCase("ru");
-                  const showCertFallback = isCollege && certName && _norm(certName) !== _norm(collegeInfo?.director_full_name);
+                  const showCertFallback =
+                    isCollege
+                    && collegeInfoLoaded
+                    && certName
+                    && normFio(certName) !== normFio(collegeInfo?.director_full_name);
                   return (
                     <li key={s.id} className="rounded-xl bg-white ring-1 ring-charcoal-100 p-3 shadow-sm">
                       <div className="flex items-center justify-between gap-2 mb-2">

@@ -526,6 +526,7 @@ def college_info(eid):
     return jsonify(
         director_full_name=(s.director_full_name if s else "") or "",
         director_basis=(s.director_basis if s else "") or "",
+        director_iin=(s.director_iin if s else "") or "",
         college_name=(s.name_ru if s else "") or "",
         college_bin=(s.bin if s else "") or "",
         college_address=(s.address if s else "") or "",
@@ -543,6 +544,11 @@ def college_payload(eid, document):
     signer_party) so all three parties can coexist.
     """
     e = EnrollmentContract.query.get_or_404(eid)
+    # Mirror invite(): without a birth date the signing matrix is unknown, so a
+    # college signature would land on an enrollment whose legal signers aren't
+    # yet defined. Block writes here for parity with the token flow.
+    if not e.required_matrix:
+        return jsonify(error="Укажите дату рождения абитуриента — от неё зависит матрица подписантов"), 400
     if document not in DOCUMENTS:
         return jsonify(error="Неизвестный документ"), 400
     rel = e.doc_path(document, "docx")
@@ -574,6 +580,8 @@ def college_sign(eid, document):
     document row stay untouched.
     """
     e = EnrollmentContract.query.get_or_404(eid)
+    if not e.required_matrix:
+        return jsonify(error="Укажите дату рождения абитуриента — от неё зависит матрица подписантов"), 400
     if document not in DOCUMENTS:
         return jsonify(error="Неизвестный документ"), 400
 
@@ -601,15 +609,28 @@ def college_sign(eid, document):
     except SignatureError as exc:
         return jsonify(error=str(exc)), 400
 
-    # Soft identity check against the director's BIN in CollegeSettings.
+    # Soft identity check: accept EITHER the college's БИН (org cert) OR the
+    # configured director's personal ИИН (personal cert — the common case in
+    # KZ colleges). Warn only if the signer's ID matches neither of the two
+    # configured expected values. If both settings are blank we can't check
+    # anything meaningful — skip the warning to avoid false positives.
     settings = CollegeSettings.query.first()
     expected_bin = _normalize_iin((settings.bin if settings else "") or "")
+    expected_director_iin = _normalize_iin((settings.director_iin if settings else "") or "")
     actual_id = _normalize_iin(parsed.signer_iin_or_bin)
-    identity_mismatch = bool(expected_bin and actual_id and expected_bin != actual_id)
+    identity_mismatch = bool(
+        actual_id
+        and (expected_bin or expected_director_iin)
+        and actual_id != expected_bin
+        and actual_id != expected_director_iin
+    )
     if identity_mismatch:
+        # KZ Закон 152-V — mask ID to last-4 in logs (parity with public_submit).
+        def _tail(v: str) -> str:
+            return v[-4:] if v and len(v) >= 4 else "****"
         current_app.logger.warning(
-            "College signature ID mismatch e=%s doc=%s expected_bin=%s signer=%s",
-            e.id, document, expected_bin, actual_id,
+            "College signature ID mismatch e=%s doc=%s expected_bin=*****%s expected_iin=*****%s signer=*****%s",
+            e.id, document, _tail(expected_bin), _tail(expected_director_iin), _tail(actual_id),
         )
 
     sig = EnrollmentSignature(
@@ -652,7 +673,11 @@ def college_sign(eid, document):
         ok=True,
         signature=sig.to_dict(),
         warnings=parsed.warnings + (
-            [f"БИН подписанта ({actual_id}) не совпал с ожидаемым ({expected_bin})"]
+            [
+                f"ИИН/БИН подписанта ({actual_id}) не совпал ни с БИН колледжа "
+                f"({expected_bin or '—'}), ни с ИИН директора ({expected_director_iin or '—'}). "
+                "Если директор подписывает личной ЭЦП — впишите его ИИН в Настройках колледжа."
+            ]
             if identity_mismatch else []
         ),
         document=document,

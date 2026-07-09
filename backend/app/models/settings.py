@@ -11,6 +11,12 @@ class CollegeSettings(db.Model):
     name_kz = db.Column(db.String(300), default='«КҚУ» Колледжі білім беру мекемесі')
     director_full_name = db.Column(db.String(200), default="Ануаш Ж.Д.")
     director_basis = db.Column(db.String(200), default="Приказа")
+    # Personal IIN on the director's ЭЦП certificate. Optional — populate it
+    # only if the director signs with a personal certificate (the common case
+    # in KZ colleges); the college-sign endpoint then accepts BIN OR this IIN
+    # as a valid signer identity, eliminating the spurious "mismatch" warning
+    # on every legitimate director sign.
+    director_iin = db.Column(db.String(20), default="")
     address = db.Column(db.String(300), default="г. Алматы, проспект Сейфуллина, 521")
     bin = db.Column(db.String(20), default="030640000531")
     iik = db.Column(db.String(40), default="KZ9584901KZ014467972")
@@ -32,6 +38,7 @@ class CollegeSettings(db.Model):
             "name_kz": self.name_kz,
             "director_full_name": self.director_full_name,
             "director_basis": self.director_basis,
+            "director_iin": self.director_iin or "",
             "address": self.address,
             "bin": self.bin,
             "iik": self.iik,

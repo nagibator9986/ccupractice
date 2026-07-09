@@ -9,6 +9,14 @@ backend/archive/
 backend/uploads/
 backend/.env
 
+# The consent template is rebuilt (and stale versions swept) on every
+# ensure_enrollment_templates() call — see backend/app/services/
+# enrollment_template_builder.py. Committing a copy is a foot-gun: the file
+# gets silently unlinked at runtime on the first startup and can shadow the
+# current builder on any deploy that races the sweep. Contracts stay tracked
+# (they depend on templates_docx/source/*.docx and are `if not exists` builds).
+backend/templates_docx/consent_template_v*.docx
+
 # Node
 frontend/node_modules/
 frontend/dist/
