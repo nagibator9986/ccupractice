@@ -619,7 +619,7 @@ export default function EnrollmentDetailPage() {
                     <div className="font-semibold text-sm text-charcoal-700">{director}</div>
                     {basis && <div className="text-[11px] text-charcoal-500 mt-0.5">Действует на основании: {basis}</div>}
                     {showCertName && (
-                      <div className="text-[10px] text-charcoal-400 mt-1" title="Как записано в CN ЭЦП-сертификата НУЦ РК. Отображается только для аудита.">
+                      <div className="text-[10px] text-charcoal-400 mt-1" title="Как записано в CN ЭЦП-сертификата. Отображается только для аудита.">
                         CN сертификата ЭЦП: {certName}
                       </div>
                     )}
@@ -649,21 +649,34 @@ export default function EnrollmentDetailPage() {
               <ul className="space-y-3">
                 {[...item.signatures].sort((a, b) => (a.created_at || "").localeCompare(b.created_at || "")).map((s) => {
                   const isCollege = s.signer_party === "college";
+                  const isParent  = s.signer_party === "parent";
+                  const isStudent = s.signer_party === "student";
                   const orgName = isCollege ? (collegeInfo?.college_name || "Колледж") : null;
-                  // A college signature is an organization's ЭЦП but the
-                  // certificate's IIN is the DIRECTOR's personal ID (the
-                  // physical person holding the key). We label it as ИИН and
-                  // additionally show the organization's БИН from settings.
+                  // Authoritative ФИО per party — the enrollment form / college
+                  // settings hold the FULL name (surname + given name +
+                  // patronymic), while an ЭЦП certificate CN often carries only
+                  // a partial form (e.g. Kazakh "АНУАШ ДҮЙСЕНБЕКҰЛЫ" — no
+                  // surname, or a Russian cert with surname + patronymic only,
+                  // as with the parent example that motivated this fix).
+                  // Prefer the authoritative form; surface the CN as an audit
+                  // line when it differs.
                   const certName = s.signer_full_name || "";
-                  const displayName = isCollege
-                    ? (collegeInfo?.director_full_name
-                        || (collegeInfoLoaded ? (certName || "—") : "…"))
-                    : (certName || "—");
+                  const authoritativeName = isCollege
+                    ? (collegeInfo?.director_full_name || "")
+                    : isParent
+                      ? (item.parent_full_name || "")
+                      : isStudent
+                        ? (item.applicant_full_name || "")
+                        : "";
+                  // While collegeInfo is still loading, don't briefly flash the
+                  // cert CN as the director name — show "…" placeholder.
+                  const isStillLoadingCollege = isCollege && !collegeInfoLoaded;
+                  const displayName = authoritativeName
+                    || (isStillLoadingCollege ? "…" : (certName || "—"));
                   const showCertFallback =
-                    isCollege
-                    && collegeInfoLoaded
+                    !isStillLoadingCollege
                     && certName
-                    && normFio(certName) !== normFio(collegeInfo?.director_full_name);
+                    && normFio(certName) !== normFio(authoritativeName);
                   return (
                     <li key={s.id} className="rounded-xl bg-white ring-1 ring-charcoal-100 p-3 shadow-sm">
                       <div className="flex items-center justify-between gap-2 mb-2">
@@ -689,7 +702,7 @@ export default function EnrollmentDetailPage() {
                         <div className="font-medium">{displayName}</div>
                         <div className="text-[11px] text-charcoal-500">ИИН: {s.signer_iin_or_bin || "—"}</div>
                         {showCertFallback && (
-                          <div className="text-[10px] text-charcoal-400 mt-0.5" title="Как записано в CN ЭЦП-сертификата НУЦ РК. Только для аудита.">
+                          <div className="text-[10px] text-charcoal-400 mt-0.5" title="Как записано в CN ЭЦП-сертификата. Только для аудита.">
                             CN сертификата ЭЦП: {certName}
                           </div>
                         )}

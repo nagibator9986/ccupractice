@@ -40,6 +40,8 @@ from ..models import (
     EnrollmentContract,
     PARTY_COLLEGE,
     PARTY_LABELS,
+    PARTY_PARENT,
+    PARTY_STUDENT,
 )
 from ..utils.files import ensure_dir, safe_filename
 from ..utils.time import utc_now
@@ -216,54 +218,63 @@ def generate_signature_certificate(
                 sorted(sigs, key=lambda x: (x.created_at is None, x.created_at or datetime.min))
             ):
                 is_college = s.signer_party == PARTY_COLLEGE
+                is_parent = s.signer_party == PARTY_PARENT
+                is_student = s.signer_party == PARTY_STUDENT
                 party_label = PARTY_LABELS.get(s.signer_party, s.signer_party)
                 _p(doc, f"  Подпись №{j + 1} — {party_label}", size=11, bold=True,
                    color=_BRAND_CORAL if is_college else _BRAND_INK)
+
+                # Authoritative ФИО per party — the enrollment form / college
+                # settings hold the FULL name (surname + given name + patronymic),
+                # while an ЭЦП certificate CN often carries only a partial form
+                # (e.g. Kazakh "АНУАШ ДҮЙСЕНБЕКҰЛЫ" — no surname, or a Russian
+                # cert with surname + patronymic only). Prefer the authoritative
+                # form for readability; surface the CN separately for audit.
+                if is_college:
+                    authoritative_name = (
+                        (college.director_full_name if college else "") or ""
+                    )
+                elif is_parent:
+                    authoritative_name = e.parent_full_name or ""
+                elif is_student:
+                    authoritative_name = e.applicant_full_name or ""
+                else:
+                    authoritative_name = ""
+                display_name = authoritative_name or (s.signer_full_name or "—")
+
                 if is_college:
                     # Explicit ORGANIZATION signature block — this is what the
                     # user sees as "подпись организации", distinct from the
                     # personal (студент / родитель) signatures below.
-                    # Director's ФИО is taken from CollegeSettings (authoritative
-                    # organizational record) — the ЭЦП certificate's CN often
-                    # carries only the Kazakh given-name+patronymic form
-                    # (e.g. "АНУАШ ДҮЙСЕНБЕКҰЛЫ"), so we surface the settings
-                    # name as the primary line and the cert-CN separately for
-                    # auditability.
-                    director_from_settings = (
-                        (college.director_full_name if college else "") or ""
-                    )
-                    display_director = director_from_settings or (s.signer_full_name or "—")
                     _kv(doc, "    Организация", college_name, bold_value=True)
                     if college_bin:
                         _kv(doc, "    БИН", college_bin)
                     if college_addr:
                         _kv(doc, "    Адрес", college_addr)
-                    _kv(doc, "    Директор", display_director, bold_value=True)
+                    _kv(doc, "    Директор", display_name, bold_value=True)
                     if college_basis:
                         _kv(doc, "    Действует на основании", college_basis)
-                    # Preserve the ЭЦП certificate's own identity for audit —
-                    # do NOT drop it, since it's the legal proof of who owned
-                    # the private key at signing time. Kazakh ЭЦП certs often
-                    # carry a shortened CN (given name + patronymic only) — the
-                    # label makes clear this is what's LITERALLY in the ЭЦП, not
-                    # a mismatch bug on our side.
-                    # Compare against what was actually rendered (display_director)
-                    # so a fallback-to-cert-CN doesn't cause the CN line to
-                    # redundantly reprint the same string a second time (which
-                    # happened when settings.director_full_name was empty).
-                    if (
-                        s.signer_full_name
-                        and s.signer_full_name.strip().casefold()
-                            != (display_director or "").strip().casefold()
-                    ):
-                        _kv(doc, "    CN сертификата ЭЦП (как в НУЦ РК)", s.signer_full_name)
-                    # The number in `signer_iin_or_bin` can be either an ИИН
-                    # (personal director cert — common) or a БИН (org cert) —
-                    # the DB column is polymorphic, so the label is too.
-                    _kv(doc, "    ИИН/БИН подписанта (по сертификату)", _mask_iin(s.signer_iin_or_bin))
                 else:
-                    _kv(doc, "    Подписант", s.signer_full_name or "—", bold_value=True)
-                    _kv(doc, "    ИИН (скрыт)", _mask_iin(s.signer_iin_or_bin))
+                    _kv(doc, "    Подписант", display_name, bold_value=True)
+
+                # ЭЦП certificate's own identity — audit line, shown only when
+                # the CN is materially different from the authoritative name.
+                # Casefold + NFKC-normalized whitespace so a trailing space /
+                # NBSP flip doesn't spuriously trigger the "differs" branch.
+                cert_cn = (s.signer_full_name or "").strip()
+                def _norm_ru(v: str) -> str:
+                    import unicodedata as _u
+                    return " ".join(_u.normalize("NFKC", v).split()).casefold()
+                if (
+                    cert_cn
+                    and _norm_ru(cert_cn) != _norm_ru(display_name)
+                ):
+                    _kv(doc, "    CN сертификата ЭЦП", cert_cn)
+
+                # The number in `signer_iin_or_bin` can be an ИИН (personal cert
+                # — common for parent / student / director) or a БИН (org cert)
+                # — the DB column is polymorphic, so the label is too.
+                _kv(doc, "    ИИН/БИН подписанта (по сертификату)", _mask_iin(s.signer_iin_or_bin))
                 _kv(doc, "    Серийный № сертификата", _serial_tail(s.signer_serial))
                 _kv(doc, "    Время подписания",
                     s.created_at.strftime("%d.%m.%Y %H:%M:%S UTC")
