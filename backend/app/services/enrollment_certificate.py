@@ -238,9 +238,12 @@ def generate_signature_certificate(
                         _kv(doc, "    Действует на основании", college_basis)
                     # Preserve the ЭЦП certificate's own identity for audit —
                     # do NOT drop it, since it's the legal proof of who owned
-                    # the private key at signing time.
-                    if s.signer_full_name and s.signer_full_name != director_from_settings:
-                        _kv(doc, "    ФИО по сертификату ЭЦП", s.signer_full_name)
+                    # the private key at signing time. Kazakh ЭЦП certs often
+                    # carry a shortened CN (given name + patronymic only) — the
+                    # label makes clear this is what's LITERALLY in the ЭЦП, not
+                    # a mismatch bug on our side.
+                    if s.signer_full_name and s.signer_full_name.strip().casefold() != director_from_settings.strip().casefold():
+                        _kv(doc, "    CN сертификата ЭЦП (как в НУЦ РК)", s.signer_full_name)
                     _kv(doc, "    ИИН подписанта (по сертификату)", _mask_iin(s.signer_iin_or_bin))
                 else:
                     _kv(doc, "    Подписант", s.signer_full_name or "—", bold_value=True)

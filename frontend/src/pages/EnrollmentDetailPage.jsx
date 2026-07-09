@@ -548,10 +548,13 @@ export default function EnrollmentDetailPage() {
             // Prefer the authoritative director ФИО from CollegeSettings — the
             // ЭЦП certificate's CN sometimes carries only Kazakh given-name +
             // patronymic without a surname. Keep the cert name available as a
-            // secondary audit line.
+            // secondary audit line — casefold-normalized comparison so a
+            // trailing space or case flip on either side doesn't spuriously
+            // trigger the "shows anyway" branch.
             const certName = collegeSigs[0].signer_full_name || "";
             const director = collegeInfo?.director_full_name || certName || "—";
-            const showCertName = certName && certName !== collegeInfo?.director_full_name;
+            const norm = (v) => (v || "").trim().toLocaleLowerCase("ru");
+            const showCertName = certName && norm(certName) !== norm(collegeInfo?.director_full_name);
             return (
               <Section
                 title="Подпись организации"
@@ -570,7 +573,9 @@ export default function EnrollmentDetailPage() {
                     <div className="font-semibold text-sm text-charcoal-700">{director}</div>
                     {basis && <div className="text-[11px] text-charcoal-500 mt-0.5">Действует на основании: {basis}</div>}
                     {showCertName && (
-                      <div className="text-[10px] text-charcoal-400 mt-1">ФИО по сертификату ЭЦП: {certName}</div>
+                      <div className="text-[10px] text-charcoal-400 mt-1" title="Как записано в CN ЭЦП-сертификата НУЦ РК. Отображается только для аудита.">
+                        CN сертификата ЭЦП: {certName}
+                      </div>
                     )}
                   </div>
                   <div className="border-t border-coral-200 mt-3 pt-3 text-[11px] text-charcoal-600">
@@ -607,7 +612,8 @@ export default function EnrollmentDetailPage() {
                   const displayName = isCollege
                     ? (collegeInfo?.director_full_name || certName || "—")
                     : (certName || "—");
-                  const showCertFallback = isCollege && certName && certName !== collegeInfo?.director_full_name;
+                  const _norm = (v) => (v || "").trim().toLocaleLowerCase("ru");
+                  const showCertFallback = isCollege && certName && _norm(certName) !== _norm(collegeInfo?.director_full_name);
                   return (
                     <li key={s.id} className="rounded-xl bg-white ring-1 ring-charcoal-100 p-3 shadow-sm">
                       <div className="flex items-center justify-between gap-2 mb-2">
@@ -633,7 +639,9 @@ export default function EnrollmentDetailPage() {
                         <div className="font-medium">{displayName}</div>
                         <div className="text-[11px] text-charcoal-500">ИИН: {s.signer_iin_or_bin || "—"}</div>
                         {showCertFallback && (
-                          <div className="text-[10px] text-charcoal-400 mt-0.5">ФИО по сертификату ЭЦП: {certName}</div>
+                          <div className="text-[10px] text-charcoal-400 mt-0.5" title="Как записано в CN ЭЦП-сертификата НУЦ РК. Только для аудита.">
+                            CN сертификата ЭЦП: {certName}
+                          </div>
                         )}
                       </div>
                       <div className="mt-2 text-[11px] text-charcoal-400">
