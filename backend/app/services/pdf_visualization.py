@@ -57,6 +57,9 @@ from pypdf import PdfReader, PdfWriter
 
 _CERTIFICATE_CACHE_TTL = timedelta(minutes=5)
 
+# Salt module-cache — populated lazily on first _renderer_version() call.
+_RENDERER_VERSION_CACHED: str | None = None
+
 
 def _cache_dir() -> Path:
     """Per-request short-lived merge cache (cleared on container restart)."""
@@ -65,13 +68,47 @@ def _cache_dir() -> Path:
     return base
 
 
+def _renderer_version() -> str:
+    """Salt the cache key with a hash of the certificate/report renderers'
+    source content. ANY change to how signatures are rendered — a label
+    rename, a new field, a wording tweak — busts every cached merged PDF
+    on the next request. Prevents "I deployed a fix but the old PDF is
+    still being served for 5 minutes" surprises.
+
+    Cached on the module: computed once per process (import cost only).
+    """
+    global _RENDERER_VERSION_CACHED
+    if _RENDERER_VERSION_CACHED is not None:
+        return _RENDERER_VERSION_CACHED
+    h = hashlib.sha256()
+    for rel in (
+        # Certificate/report renderers whose output is embedded in the merge.
+        "enrollment_certificate.py",   # enrollment (contract + consent) annex
+        "signature_report.py",         # practicum three-party annex
+        # LMS annex builder lives inline inside pdf_visualization.py, so its
+        # own module content salts the hash below.
+        "pdf_visualization.py",
+    ):
+        try:
+            p = Path(__file__).with_name(rel)
+            if p.is_file():
+                h.update(p.read_bytes())
+        except OSError:
+            pass
+    _RENDERER_VERSION_CACHED = h.hexdigest()[:8]
+    return _RENDERER_VERSION_CACHED
+
+
 def _signature_fingerprint(signatures) -> str:
     """Hash that changes whenever the signature set on the entity changes.
 
     Used as part of the cache key so a freshly-added signature invalidates a
     cached merged PDF without having to track creation timestamps explicitly.
+    Also salted with the RENDERER version so a code change to how signatures
+    are visualized busts every prior cache entry on the next request.
     """
     h = hashlib.sha256()
+    h.update(_renderer_version().encode())
     for s in sorted(signatures or [], key=lambda x: (x.id or 0)):
         h.update(str(s.id).encode())
         h.update((s.signed_payload_sha256 or "").encode())
