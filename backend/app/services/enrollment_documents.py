@@ -109,17 +109,6 @@ def _build_context(e: EnrollmentContract) -> dict:
         "phone": e.parent_phone or "",
         "email": e.parent_email or "",
     }
-    # Which payment schedule paragraphs the contract should show. The
-    # official document's business rule (embedded in section 4 text):
-    #   * 4.2 = 1st year AFTER 9 CLASS (basic middle school base)
-    #   * 4.3 = 1st year AFTER 11 CLASS, or ANY 2nd/3rd/4th year
-    # We wrap 4.2 and 4.3 with docxtpl {%p if %} markers in the template
-    # builder (see enrollment_template_builder._wrap_payment_sections);
-    # this flag drives the branching.
-    education_base = (e.education_base or "").strip()
-    course = int(e.course or 1)
-    is_after_9_first_course = (education_base == "9" and course == 1)
-
     return {
         "contract": {
             "number": e.number or "________",
@@ -128,11 +117,10 @@ def _build_context(e: EnrollmentContract) -> dict:
             "date_month": _MONTHS_RU[d.month],
             "date_year": d.year,
             "tuition_amount": _fmt_amount(e.tuition_year_amount),
-            "education_base": education_base,
+            "education_base": e.education_base or "",
             "study_form": e.study_form or "очная",
-            "course": course,
+            "course": e.course or 1,
         },
-        "is_after_9_first_course": is_after_9_first_course,
         "college": settings.to_dict() if settings else {},
         # `student` and `applicant` point at the same person — the contract uses
         # `student.*`, the consent uses `applicant.*`.
