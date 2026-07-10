@@ -305,6 +305,59 @@ def download(eid, document, fmt):
 
     archive_root = current_app.config["ARCHIVE_FOLDER"]
 
+    # ── Auto-regenerate stale archive when template code has drifted ────────
+    # A template-builder code change (say, adding then reverting a docxtpl
+    # conditional wrapper) rebuilds the derivative .docx on the next call to
+    # ensure_enrollment_templates(), but any ALREADY-ARCHIVED contract/consent
+    # for prior enrollments stays frozen on disk. That means an admin who
+    # regenerated documents BEFORE the fix but hasn't clicked Regenerate again
+    # keeps seeing the pre-fix layout even though the code is now correct.
+    # We detect that by comparing the stored template SHA to the current
+    # template file's SHA — if they differ (or the stored SHA is NULL because
+    # the enrollment predates this column) AND the enrollment has no
+    # signatures, transparently re-render before serving. Signed enrollments
+    # are LEFT UNTOUCHED because the CMS payload is cryptographically bound
+    # to the exact bytes on disk; altering them would invalidate every
+    # signature. This is the same "sign-what-you-see" contract public_submit
+    # relies on.
+    if not (e.signatures or []):
+        try:
+            from ..services.enrollment_documents import (
+                template_sha256, generate_enrollment_files,
+            )
+            from ..services.enrollment_template_builder import (
+                ensure_enrollment_templates,
+            )
+            templates = ensure_enrollment_templates(
+                current_app.config["TEMPLATES_FOLDER"]
+            )
+            current_sha = template_sha256(templates[document])
+            stored_sha = getattr(e, f"{document}_template_sha", None)
+            if current_sha and stored_sha != current_sha:
+                current_app.logger.info(
+                    "Auto-regenerating enrollment %s document=%s "
+                    "(template SHA changed: stored=%s current=%s)",
+                    e.id, document, (stored_sha or "NULL")[:8], current_sha[:8],
+                )
+                public_base = request.headers.get("X-Public-Origin") or None
+                generate_enrollment_files(e, public_base=public_base)
+                db.session.commit()
+                # Refresh the archive path — the applicant name/year may have
+                # changed since the last render and shifted the output location.
+                rel = e.doc_path(document, fmt)
+                if not rel:
+                    return jsonify(error="Файл не найден"), 404
+        except Exception as exc:  # noqa: BLE001
+            # Never block a download on an auto-regenerate failure — log and
+            # serve whatever's on disk. The client will see the stale bytes
+            # until an admin clicks Regenerate manually, but at least the
+            # download itself works.
+            current_app.logger.exception(
+                "Auto-regeneration failed for enrollment=%s doc=%s: %s",
+                e.id, document, exc,
+            )
+            db.session.rollback()
+
     # PDF + has signatures → serve a merged (visual) copy
     if fmt == "pdf" and (e.signatures or []):
         from ..services.pdf_visualization import merge_enrollment_pdf

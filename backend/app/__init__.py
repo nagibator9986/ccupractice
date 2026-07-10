@@ -242,6 +242,23 @@ def create_app() -> Flask:
             persistent=bool(report and report.persistent),
         )
 
+    @app.get("/api/version")
+    def version():
+        """Report the deployed git commit SHA + branch so admins can verify
+        a fix actually reached production. Railway auto-injects
+        RAILWAY_GIT_COMMIT_SHA and RAILWAY_GIT_BRANCH into the container
+        environment, so no Dockerfile changes are needed. Falls back to
+        "unknown" locally where those env vars aren't set. Publicly readable
+        because knowing "what SHA is running" is not sensitive."""
+        sha = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_SHA") or "unknown"
+        branch = os.getenv("RAILWAY_GIT_BRANCH") or "unknown"
+        return jsonify(
+            sha=sha,
+            short_sha=sha[:8] if sha != "unknown" else "unknown",
+            branch=branch,
+            service="CCU PRACTICUM",
+        )
+
     @app.get("/api/admin/health")
     @jwt_required()
     def admin_health():

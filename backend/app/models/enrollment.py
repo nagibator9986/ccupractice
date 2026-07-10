@@ -177,6 +177,16 @@ class EnrollmentContract(db.Model):
     consent_docx_path = db.Column(db.String(500))
     consent_pdf_path = db.Column(db.String(500))
 
+    # SHA-256 of the docxtpl template used to render each archived document.
+    # Compared against the CURRENT template file's SHA at download time; if
+    # they diverge (template code changed since the archive was rendered) AND
+    # the enrollment has no signatures yet, the download route auto-regenerates
+    # transparently. Signed enrollments keep their original archived bytes
+    # because the CMS is cryptographically bound to them. See migration
+    # j4e5f6a7b8c9 for the rationale.
+    contract_template_sha = db.Column(db.String(64))
+    consent_template_sha = db.Column(db.String(64))
+
     status = db.Column(db.String(30), default=EnrollmentStatus.DRAFT, nullable=False, index=True)
     notes = db.Column(db.Text)
 

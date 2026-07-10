@@ -1,11 +1,24 @@
 """Generate the enrollment DOCX/PDF documents (contract + consent)."""
 from __future__ import annotations
 
+import hashlib
 from datetime import date
 from pathlib import Path
 
 from docxtpl import DocxTemplate
 from flask import current_app
+
+
+def template_sha256(template_path: Path) -> str | None:
+    """SHA-256 of a docxtpl template file. Used to detect when the archived
+    document was rendered by a since-updated template so the download route
+    can auto-regenerate transparently. Returns None on any I/O error — the
+    caller treats missing SHA as "cannot verify" and errs on the side of
+    NOT regenerating (safer than mid-download soffice invocation)."""
+    try:
+        return hashlib.sha256(Path(template_path).read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 from ..models import (
     CollegeSettings,
@@ -208,6 +221,10 @@ def _render_one(e: EnrollmentContract, document: str, template_path: Path,
             )
 
     setattr(e, f"{document}_docx_path", str(docx_full.relative_to(archive_root)))
+
+    # Record the template file's SHA so the download route can detect a
+    # divergence later and auto-regenerate (only for unsigned enrollments).
+    setattr(e, f"{document}_template_sha", template_sha256(template_path))
 
     # The DOCX was just rewritten → any prior PDF is stale. Clear + remove before
     # reconverting so a failed conversion can't leave a mismatched PDF.
