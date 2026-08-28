@@ -17,9 +17,13 @@ age is unknown, which blocks inviting a signer, and the age decides *who*
 signs (< 16 → parent, ≥ 16 → the applicant). It is derived from the ИИН
 (`YYMMDD` + a century digit), so the imported rows are immediately signable.
 
-The script is idempotent — matching is on the unique `students.iin`, so a
-re-run with a refreshed export updates the existing rows instead of
-duplicating them.
+The script only ever ADDS. An applicant already in the database — matched by
+ИИН, or failing that by ФИО (case/«ё»/spacing-insensitive) — is skipped and
+left completely untouched, so hand-entered data on an existing card is never
+overwritten. The one field written on a skipped row is `is_grant_student`,
+because that flag alone decides whether the student appears in the LMS picker;
+each such row is listed in the report. Re-running is therefore safe and
+produces no duplicates.
 
 Usage:
     cd backend && . .venv/bin/activate
@@ -193,6 +197,16 @@ def default_source() -> Path | None:
     return matches[-1] if matches else None
 
 
+def normalize_name(value: str) -> str:
+    """Fold a ФИО down to a comparison key.
+
+    Case, «ё»/«е» and irregular spacing all drop out — the ministry export and a
+    hand-typed student card rarely agree on those, and a false "not found" would
+    duplicate a real person.
+    """
+    return " ".join((value or "").split()).casefold().replace("ё", "е")
+
+
 def build_notes(group: str, row: dict[str, str], year: int) -> str:
     parts = [f"{NOTES_MARKER} {year} · группа {group}"]
     for label, key in (
@@ -241,13 +255,36 @@ def seed_specialties(sheets, *, verbose: bool = True) -> int:
 
 
 def import_students(sheets, *, year: int, verbose: bool = True) -> dict:
+    """Insert every applicant missing from the DB; SKIP the ones already there.
+
+    An existing student is matched by ИИН first (the unique, authoritative key)
+    and by normalized ФИО second. A match is left ALONE — not one field on the
+    existing row is overwritten, so a manually filled card (родитель, паспорт,
+    адрес) survives the import untouched.
+
+    The single exception is ``is_grant_student``. That flag is the only thing
+    that puts a student into the LMS-contract picker, which is the entire point
+    of this import; a skipped row that lacks it would silently stay invisible.
+    It is therefore raised on matched rows too, and every such row is reported.
+    """
     today = utc_today()
     stats = {
-        "rows": 0, "created": 0, "updated": 0, "unchanged": 0,
+        "rows": 0, "created": 0, "skipped": 0, "flag_raised": [],
         "no_birth_date": [], "inferred_century": [], "bad_iin": [],
-        "duplicate_iin": [],
+        "duplicate_iin": [], "duplicate_name": [], "ambiguous_name": [],
     }
-    seen: dict[str, str] = {}
+
+    # Load the existing roster once — 2 queries per applicant would be 500 round
+    # trips against a remote Postgres.
+    by_iin: dict[str, Student] = {}
+    by_name: dict[str, list[Student]] = {}
+    for existing in Student.query.all():
+        if existing.iin:
+            by_iin[existing.iin] = existing
+        by_name.setdefault(normalize_name(existing.full_name), []).append(existing)
+
+    seen_iin: dict[str, str] = {}
+    seen_name: dict[str, str] = {}
 
     for group, rows in sheets:
         for row in rows:
@@ -255,16 +292,48 @@ def import_students(sheets, *, year: int, verbose: bool = True) -> dict:
             full_name = (row.get("ФИО") or "").strip()
             iin = normalize_iin(row.get("ИИН"))
             specialty = (row.get("Специальность") or "").strip()
+            name_key = normalize_name(full_name)
+            where = f"{group}/{full_name}"
 
             if iin and not iin_checksum_ok(iin):
                 stats["bad_iin"].append(f"{group}: {full_name} — {iin}")
-            if iin and iin in seen:
-                stats["duplicate_iin"].append(
-                    f"{iin}: {seen[iin]} ↔ {group}/{full_name}"
+
+            # Duplicates *within* the export — keep the first occurrence only.
+            if iin and iin in seen_iin:
+                stats["duplicate_iin"].append(f"{iin}: {seen_iin[iin]} ↔ {where}")
+                continue
+            if name_key and name_key in seen_name:
+                stats["duplicate_name"].append(
+                    f"{full_name}: {seen_name[name_key]} ↔ {where}"
                 )
                 continue
             if iin:
-                seen[iin] = f"{group}/{full_name}"
+                seen_iin[iin] = where
+            if name_key:
+                seen_name[name_key] = where
+
+            # Already in the database? Then skip — ИИН first, ФИО second.
+            match = by_iin.get(iin) if iin else None
+            matched_by = "ИИН" if match is not None else ""
+            if match is None and name_key:
+                candidates = by_name.get(name_key) or []
+                if len(candidates) > 1:
+                    # Two different people can share a ФИО. Never guess silently.
+                    stats["ambiguous_name"].append(
+                        f"{full_name} — совпадений в базе: {len(candidates)} "
+                        f"(id: {', '.join(str(c.id) for c in candidates)})"
+                    )
+                if candidates:
+                    match = candidates[0]
+                    matched_by = "ФИО"
+            if match is not None:
+                stats["skipped"] += 1
+                if not match.is_grant_student:
+                    match.is_grant_student = True
+                    stats["flag_raised"].append(
+                        f"{where} → id={match.id} (совпадение по {matched_by})"
+                    )
+                continue
 
             birth_date, inferred = birth_date_from_iin(iin, today)
             if birth_date is None:
@@ -274,65 +343,34 @@ def import_students(sheets, *, year: int, verbose: bool = True) -> dict:
                     f"{group}: {full_name} — {iin} → {birth_date.isoformat()}"
                 )
 
-            student = Student.query.filter_by(iin=iin).first() if iin else None
-            if student is None:
-                # Without an ИИН there is no stable key — fall back to the
-                # (name, group) pair so a re-run still updates in place.
-                student = Student.query.filter_by(
-                    full_name=full_name, group_name=group
-                ).first()
-            is_new = student is None
-            if is_new:
-                student = Student(full_name=full_name, iin=iin or None)
-                db.session.add(student)
-
-            before = _snapshot(student)
-
-            # Authoritative from the ministry export.
-            student.full_name = full_name[:200]
+            student = Student(
+                full_name=full_name[:200],
+                iin=iin or None,
+                group_name=group[:60],
+                specialty=specialty[:200] or None,
+                birth_date=birth_date,
+                is_grant_student=True,
+                education_program=specialty[:300] or None,
+                course=1,
+                enrollment_year=year,
+                form_of_study="очная",
+                notes=build_notes(group, row, year),
+            )
+            db.session.add(student)
+            # Register immediately so a later row in the same run matches this
+            # pending insert instead of creating a twin.
             if iin:
-                student.iin = iin
-            student.group_name = group[:60]
-            student.specialty = specialty[:200] or student.specialty
-            if birth_date:
-                student.birth_date = birth_date
-            student.is_grant_student = True
-
-            # Fill-only: never clobber an admin's manual correction.
-            if not student.education_program and specialty:
-                student.education_program = specialty[:300]
-            if not student.course:
-                student.course = 1
-            if not student.enrollment_year:
-                student.enrollment_year = year
-            if not student.form_of_study:
-                student.form_of_study = "очная"
-            # Notes are refreshed only while they are still the import blob.
-            if not student.notes or student.notes.startswith(NOTES_MARKER):
-                student.notes = build_notes(group, row, year)
-
-            if is_new:
-                stats["created"] += 1
-            elif _snapshot(student) != before:
-                stats["updated"] += 1
-            else:
-                stats["unchanged"] += 1
+                by_iin[iin] = student
+            if name_key:
+                by_name.setdefault(name_key, []).append(student)
+            stats["created"] += 1
 
     if verbose:
         print(
             f"  строк: {stats['rows']} · создано: {stats['created']} · "
-            f"обновлено: {stats['updated']} · без изменений: {stats['unchanged']}"
+            f"пропущено (уже есть): {stats['skipped']}"
         )
     return stats
-
-
-def _snapshot(student: Student) -> tuple:
-    return (
-        student.full_name, student.iin, student.group_name, student.specialty,
-        student.birth_date, bool(student.is_grant_student),
-        student.education_program, student.course, student.enrollment_year,
-        student.form_of_study, student.notes,
-    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -371,7 +409,10 @@ def main(argv: list[str] | None = None) -> int:
 
         for title, key in (
             ("Некорректная контрольная сумма ИИН", "bad_iin"),
-            ("Дубли ИИН в файле (пропущены)", "duplicate_iin"),
+            ("Дубли ИИН внутри файла (взята первая строка)", "duplicate_iin"),
+            ("Дубли ФИО внутри файла (взята первая строка)", "duplicate_name"),
+            ("Одинаковое ФИО у нескольких записей в базе — сверьте вручную", "ambiguous_name"),
+            ("Существующим студентам проставлен флаг «Грантник»", "flag_raised"),
             ("Век рождения определён по возрасту — проверьте вручную", "inferred_century"),
             ("Дата рождения не определена (подписант неизвестен)", "no_birth_date"),
         ):
