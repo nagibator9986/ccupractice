@@ -445,6 +445,31 @@ def download(lid, fmt):
 @admin_required
 def delete_lms(lid):
     lms = LmsContract.query.get_or_404(lid)
+
+    # `signatures` and `signing_requests` are ``cascade="all, delete-orphan"``,
+    # so deleting the contract destroys the CMS signature rows outright — and
+    # the archived DOCX/PDF they are bound to via `signed_payload_sha256` are
+    # unlinked below. Require an explicit confirmation, mirroring the
+    # `has_signatures` contract the regenerate endpoint already uses.
+    # `students.delete_student` points admins straight at this endpoint, so an
+    # unguarded delete here is one click away from destroying signed documents.
+    force = bool(get_json_safe().get("force"))
+    has_sigs = bool(lms.signatures)
+    active_reqs = (
+        LmsSigningRequest.query.filter_by(lms_contract_id=lid)
+        .filter(LmsSigningRequest.status.in_(("pending", "viewed", "signed")))
+        .count()
+    )
+    if (has_sigs or active_reqs) and not force:
+        return jsonify(
+            error="Договор подписан или отправлен на подпись — удаление безвозвратно "
+                  "уничтожит электронные подписи и сформированные файлы. "
+                  "Повторите с подтверждением, если это действительно нужно.",
+            code="has_signatures",
+            signatures_count=len(lms.signatures or []),
+            active_requests=active_reqs,
+        ), 409
+
     archive_base = Path(current_app.config["ARCHIVE_FOLDER"])
     files = [archive_base / rel for rel in (lms.docx_path, lms.pdf_path) if rel]
 

@@ -163,7 +163,27 @@ export default function LmsContractDetailPage() {
       toast.success("Удалено");
       navigate("/lms-contracts");
     } catch (e) {
-      toast.error(e.response?.data?.error || "Не удалось удалить");
+      const d = e.response?.data || {};
+      // The contract carries ЭЦП signatures / active signing links. The server
+      // refuses the first attempt on purpose — ask a second, explicit question
+      // that names what will be destroyed before repeating with `force`.
+      if (d.code === "has_signatures") {
+        const ok = window.confirm(
+          `${d.error}\n\nБудет уничтожено: подписей — ${d.signatures_count ?? 0}, ` +
+            `активных ссылок на подпись — ${d.active_requests ?? 0}, ` +
+            "а также сформированные DOCX/PDF.\n\nУдалить безвозвратно?",
+        );
+        if (!ok) return;
+        try {
+          await lmsContractsApi.remove(id, true);
+          toast.success("Удалено");
+          navigate("/lms-contracts");
+        } catch (e2) {
+          toast.error(e2.response?.data?.error || "Не удалось удалить");
+        }
+        return;
+      }
+      toast.error(d.error || "Не удалось удалить");
     }
   }
 

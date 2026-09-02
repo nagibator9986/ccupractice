@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import PageHeader from "../components/PageHeader.jsx";
 import Modal from "../components/Modal.jsx";
 import { TextField, SelectField } from "../components/Field.jsx";
-import { lmsContractsApi } from "../api/endpoints.js";
+import { lmsContractsApi, studentsApi } from "../api/endpoints.js";
 import { formatDate } from "../utils/format.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { StatusPill } from "./EnrollmentsPage.jsx";
@@ -17,6 +17,10 @@ export default function LmsContractsPage() {
   const [status, setStatus] = useState("");
   const [creating, setCreating] = useState(null);
   const [grantStudents, setGrantStudents] = useState([]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  // StrictMode double-invokes effects in dev; without this the deep link would
+  // fire openCreate twice (two fetches, a doubled toast).
+  const createParamConsumed = useRef(false);
 
   async function load() {
     setLoading(true);
@@ -35,22 +39,101 @@ export default function LmsContractsPage() {
     return () => clearTimeout(t);
   }, [q, status]); // eslint-disable-line
 
-  async function openCreate() {
+  // Deep link from the students page: /lms-contracts?create=<studentId>.
+  // Before this, the param was ignored outright — the button navigated here
+  // and nothing happened, which read as "студент пропал".
+  useEffect(() => {
+    const createFor = searchParams.get("create");
+    if (!createFor || createParamConsumed.current) return;
+    createParamConsumed.current = true;
+    // Consume the param immediately so a refresh or a back-navigation does not
+    // reopen the modal.
+    const next = new URLSearchParams(searchParams);
+    next.delete("create");
+    setSearchParams(next, { replace: true });
+    if (!isAdmin) {
+      toast.error("Создание LMS-договора доступно только администратору.");
+      return;
+    }
+    openCreate(createFor);
+  }, []); // eslint-disable-line
+
+  // Why a student the admin explicitly picked is not offered here. Without
+  // this the deep link silently opened an empty picker and the student looked
+  // like they had vanished from the system.
+  async function explainMissingStudent(sid) {
+    try {
+      const { item } = await studentsApi.get(sid);
+      if (!item.is_grant_student) {
+        toast.error(
+          `«${item.full_name}» не отмечен как «Грантник (госзаказ)» — LMS-договор доступен только грантникам.`,
+          { duration: 8000 },
+        );
+        return;
+      }
+      const list = await lmsContractsApi.list().catch(() => ({ items: [] }));
+      const active = (list.items || []).find(
+        (c) => c.student_id === item.id && c.status !== "completed",
+      );
+      if (active) {
+        toast(
+          `У «${item.full_name}» уже есть незавершённый LMS-договор ${
+            active.number ? `№ ${active.number}` : `LMS-${active.id} (без номера)`
+          }. Второй оформить нельзя — завершите или удалите текущий.`,
+          { icon: "ℹ️", duration: 9000 },
+        );
+      } else {
+        toast.error(`«${item.full_name}» недоступен для нового LMS-договора.`, {
+          duration: 6000,
+        });
+      }
+    } catch (e) {
+      if (e.response?.status === 404) {
+        toast.error(
+          "Студент из ссылки больше не существует — обновите реестр студентов.",
+          { duration: 7000 },
+        );
+        return;
+      }
+      toast.error("Не удалось проверить студента из ссылки.");
+    }
+  }
+
+  // `preselectStudentId` comes from the "Создать LMS-договор" button on the
+  // students page (/lms-contracts?create=<id>). Callers must invoke this as
+  // `openCreate()` — an onClick handler would otherwise pass the click event.
+  async function openCreate(preselectStudentId = null) {
     try {
       const today = new Date().toISOString().slice(0, 10);
       const [numRes, studentsRes] = await Promise.all([
         lmsContractsApi.suggestNumber().catch(() => ({ number: "" })),
         lmsContractsApi.grantStudents().catch(() => ({ items: [] })),
       ]);
-      setGrantStudents(studentsRes.items || []);
-      if (!studentsRes.items?.length) {
+      const students = studentsRes.items || [];
+      setGrantStudents(students);
+      let preselected = "";
+      if (preselectStudentId) {
+        const hit = students.find((s) => String(s.id) === String(preselectStudentId));
+        if (hit) preselected = String(hit.id);
+        else await explainMissingStudent(preselectStudentId);
+      } else if (!students.length) {
+        // Two causes, opposite remedies: nobody is flagged as a grant student,
+        // or everybody flagged already holds an unfinished contract. Telling
+        // an admin to "tick Грантник" in the second case is a dead end.
+        const flagged = await studentsApi
+          .list({ is_grant: 1 })
+          .then((r) => r.total || 0)
+          .catch(() => 0);
         toast(
-          "Нет доступных студентов-грантников. Включите флаг «Грантник» на карточке студента.",
-          { icon: "💡", duration: 5500 },
+          flagged
+            ? "Все студенты-грантники уже имеют незавершённый LMS-договор. " +
+              "Завершите или удалите действующий договор, чтобы оформить новый."
+            : "Нет студентов с отметкой «Грантник». Включите её на карточке студента.",
+          { icon: "💡", duration: 7000 },
         );
       }
       setCreating({
-        student_id: "",
+        student_id: preselected,
         number: numRes.number || "",
         contract_date: today,
         funding_source: "госзаказ",
@@ -118,7 +201,7 @@ export default function LmsContractsPage() {
         </div>
         <div className="md:col-span-3 flex justify-end">
           {isAdmin && (
-            <button onClick={openCreate} className="btn btn-primary">
+            <button onClick={() => openCreate()} className="btn btn-primary">
               + Новый LMS-договор
             </button>
           )}
@@ -191,7 +274,11 @@ export default function LmsContractsPage() {
                   label: `${s.full_name}${s.iin ? ` · ИИН ${s.iin}` : ""}${s.specialty ? ` · ${s.specialty}` : ""}`,
                 })),
               ]}
-              hint="Видны только студенты с флагом «Грантник» без активного LMS-договора"
+              hint={
+                grantStudents.length
+                  ? "Видны только студенты с флагом «Грантник» без активного LMS-договора"
+                  : "Список пуст: нет грантников без активного LMS-договора. Отметьте «Грантник» на карточке студента."
+              }
             />
             <TextField label="Номер договора" value={creating.number} onChange={(v) => setCreating({ ...creating, number: v })} hint="Можно изменить" />
             <TextField label="Дата договора" type="date" value={creating.contract_date} onChange={(v) => setCreating({ ...creating, contract_date: v })} />

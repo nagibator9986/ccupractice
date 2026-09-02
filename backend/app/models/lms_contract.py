@@ -218,6 +218,14 @@ class LmsContract(db.Model):
         lazy=True,
         cascade="all, delete-orphan",
     )
+    # NOT `passive_deletes=True`, deliberately. `student_id` is NOT NULL with
+    # ``ondelete="RESTRICT"``, so deleting a Student can never be right — and
+    # this default (nullify) gives us TWO independent refusals: the ORM's
+    # ``UPDATE lms_contracts SET student_id=NULL`` dies on the NOT NULL column,
+    # which SQLite enforces unconditionally, and the FK RESTRICT fires as well
+    # wherever foreign keys are on (the PRAGMA hook in app/__init__.py swallows
+    # its own failures, so it cannot be the only guard). `delete_student`
+    # refuses before reaching either — these are the backstops for the race.
     student = db.relationship("Student", backref=db.backref("lms_contracts", lazy=True))
     source_enrollment = db.relationship(
         "EnrollmentContract",

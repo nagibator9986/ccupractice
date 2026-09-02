@@ -74,7 +74,7 @@
 | # | Файл | Проблема и исправление |
 |---|---|---|
 | 21 | `backend/app/services/bootstrap.py` | Гонка сидинга `CollegeSettings` (дубли). Фиксированный singleton-PK `id=1` → коллизия ловится существующим `IntegrityError`. |
-| 22 | `backend/app/api/students.py`, `partners.py` | Удаление грузило всю коллекцию для счётчика и не было атомарным. Замена на `count()` + обработка `IntegrityError` → 409. |
+| 22 | `backend/app/api/students.py`, `partners.py` | Удаление грузило всю коллекцию для счётчика и не было атомарным. Замена на `count()` + обработка `IntegrityError` → 409. **Уточнение (позже):** проверка в `delete_student` считала только `Contract` и пропускала `LmsContract` — удаление падало в `IntegrityError` с сообщением без номера договора. Добавлена отдельная проверка `LmsContract` (409, `code="lms_contract_exists"`, с `lms_contract_id`/`lms_contract_number`) плюс `passive_deletes=True` на связи, чтобы ORM не пытался обнулить NOT NULL-ключ. |
 | 23 | `backend/app/api/signing.py`, `frontend/.../PublicSignPage.jsx`, `endpoints.js` | Мутация состояния в GET (`pending→viewed`). Вынесена в явный `POST /public/<token>/view`, который SPA вызывает после открытия. |
 | 24 | `backend/app/api/settings.py` | Загрузка шаблона принимала любой `.docx`. Теперь проверка ZIP/OOXML (`word/document.xml`) во временном файле и атомарная замена; невалидный файл не затирает активный шаблон. |
 | 25 | `frontend/.../ArchivePage.jsx`, `backend/.../archive.py` | Нечисловой «Год» молча показывал весь архив. Ввод ограничен цифрами; backend возвращает 400 на нечисловой год. |

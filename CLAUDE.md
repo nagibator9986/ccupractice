@@ -189,6 +189,25 @@ builder and regenerate, or the change is lost on the next rebuild.
   can't `ALTER` in place). Startup applies them automatically.
 - **RBAC**: `role_required` re-checks the live DB user every request, so
   deactivation/demotion take effect immediately.
+- **LmsContract invariants** (grant-only, standalone aggregate — `LmsContract`,
+  `/api/lms-contracts`, not a document inside `EnrollmentContract`):
+  1. Only a student with `is_grant_student` may have one (`create_lms` → 422
+     `not_grant_student`, plus the `ck_lms_grant` CHECK).
+  2. The flag cannot be *cleared* while a non-completed contract exists. Both
+     `PUT /students/<id>` and `PUT /students/<id>/grant` enforce this through
+     `_grant_removal_blocked` → 409 `lms_contract_active`. Any new write path to
+     `is_grant_student` must call it too.
+  3. `lms_contracts.student_id` is NOT NULL + `ondelete="RESTRICT"`, and the
+     relationship deliberately does **not** use `passive_deletes` — the ORM's
+     nullify attempt dies on NOT NULL even where the SQLite FK pragma is off.
+     `delete_student` refuses up front so the admin gets the contract number
+     instead of an `IntegrityError`.
+  4. Deleting an LmsContract cascades to its signatures and signing requests,
+     so `delete_lms` refuses with 409 `has_signatures` unless the caller passes
+     `force` — never route a user into it without a second confirmation.
+  5. `GET /api/students?with_lms=1` attaches a compact `lms_contract` summary
+     (one query, no N+1). The list badge and `delete_student` order candidates
+     identically, so they always name the same contract.
 
 ---
 

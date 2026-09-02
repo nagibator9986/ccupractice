@@ -191,7 +191,10 @@ export const lmsContractsApi = {
   update: (id, data) => client.put(`/lms-contracts/${id}`, data).then((r) => r.data),
   generate: (id, payload) =>
     client.post(`/lms-contracts/${id}/generate`, payload || {}).then((r) => r.data),
-  remove: (id) => client.delete(`/lms-contracts/${id}`).then((r) => r.data),
+  // `force` confirms destroying existing ЭЦП signatures — the backend refuses
+  // with 409 code="has_signatures" without it.
+  remove: (id, force = false) =>
+    client.delete(`/lms-contracts/${id}`, { data: { force: !!force } }).then((r) => r.data),
   downloadDoc: (id, fmt, filename) =>
     blobDownload(`/lms-contracts/${id}/download/${fmt}`, filename),
   invite: (id, payload) =>

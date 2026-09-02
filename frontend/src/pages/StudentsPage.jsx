@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import PageHeader from "../components/PageHeader.jsx";
 import Modal from "../components/Modal.jsx";
-import { TextField, TextArea, SelectField } from "../components/Field.jsx";
+import { TextField, TextArea, SelectField, CheckboxField } from "../components/Field.jsx";
 import { partnersApi, studentsApi } from "../api/endpoints.js";
 import { useAuth } from "../context/AuthContext.jsx";
 
@@ -31,6 +31,14 @@ const EMPTY = {
   enrollment_year: new Date().getFullYear(),
   practice_type: "профессиональной",
   form_of_study: "очная",
+  // Gates standalone LMS-contract creation. Present in EMPTY so the CREATE
+  // form can set it — without it every new student was born non-grant and
+  // could never appear in the LMS create-picker. On EDIT, {...EMPTY, ...s}
+  // still lets the row's real value win.
+  is_grant_student: false,
+  // Server-provided enrichment (GET /api/students?with_lms=1); null while
+  // creating. Never sent back — stripped in onSave.
+  lms_contract: null,
   notes: "",
 };
 
@@ -62,12 +70,12 @@ export default function StudentsPage() {
       setItems((prev) =>
         prev.map((row) => (row.id === s.id ? { ...row, is_grant_student: !next } : row))
       );
-      const status = e.response?.status;
-      if (status === 409) {
-        toast.error("Нельзя снять отметку: есть активный LMS-договор");
-      } else {
-        toast.error(e.response?.data?.error || "Не удалось обновить отметку о гранте");
-      }
+      // Same 409 body as the edit modal — show the server's full sentence
+      // rather than a hardcoded summary that drops the contract number.
+      const d = e.response?.data || {};
+      toast.error(d.error || "Не удалось обновить отметку о гранте", {
+        duration: d.code ? 7000 : 4000,
+      });
     } finally {
       setGrantBusy(null);
     }
@@ -77,10 +85,22 @@ export default function StudentsPage() {
     navigate(`/lms-contracts?create=${s.id}`);
   }
 
+  // `lms_contract` is attached by the server (?with_lms=1) and therefore
+  // refreshes with every list load — no second request, no separate cache to
+  // go stale, and the same contract the delete endpoint would name.
+  // A non-completed contract pins the grant flag AND blocks the delete; a
+  // completed one only blocks the delete.
+  function activeLms(student) {
+    return student?.lms_contract?.is_active ? student.lms_contract : null;
+  }
+
   async function load() {
     setLoading(true);
     try {
-      const [s, p] = await Promise.all([studentsApi.list({ q }), partnersApi.list()]);
+      const [s, p] = await Promise.all([
+        studentsApi.list({ q, with_lms: 1 }),
+        partnersApi.list(),
+      ]);
       setItems(s.items);
       setPartners(p.items);
     } catch (e) {
@@ -131,6 +151,8 @@ export default function StudentsPage() {
     }
     try {
       const payload = { ...editing };
+      // Server-side enrichment, not a writable field.
+      delete payload.lms_contract;
       if (payload.partner_id === "") payload.partner_id = null;
       if (editing.id) {
         await studentsApi.update(editing.id, payload);
@@ -142,7 +164,17 @@ export default function StudentsPage() {
       setEditing(null);
       load();
     } catch (e) {
-      toast.error(e.response?.data?.error || "Не удалось сохранить студента");
+      const d = e.response?.data || {};
+      // 409 lms_contract_active — the grant flag cannot be cleared while an
+      // unfinished LMS contract exists. The server refuses the WHOLE update,
+      // so put the flag back in the form: otherwise every later save of this
+      // student would hit the same 409 and the admin could not save anything.
+      if (d.code === "lms_contract_active") {
+        setEditing((prev) => (prev ? { ...prev, is_grant_student: true } : prev));
+      }
+      toast.error(d.error || "Не удалось сохранить студента", {
+        duration: d.code ? 7000 : 4000,
+      });
     }
   }
 
@@ -153,9 +185,23 @@ export default function StudentsPage() {
       toast.success("Удалено");
       load();
     } catch (e) {
-      toast.error(e.response?.data?.error || "Ошибка удаления");
+      const d = e.response?.data || {};
+      // The backend now names the blocking LMS contract and returns its id —
+      // offer to jump straight there instead of leaving a dead end.
+      if (d.code === "lms_contract_exists" && d.lms_contract_id) {
+        if (confirm(`${d.error}\n\nОткрыть этот договор сейчас?`)) {
+          navigate(`/lms-contracts/${d.lms_contract_id}`);
+          return;
+        }
+      }
+      toast.error(d.error || "Ошибка удаления", { duration: d.code ? 7000 : 4000 });
     }
   }
+
+  // Edit-modal context: an unfinished LMS contract pins the grant flag on
+  // (the backend enforces the same rule — this only avoids a pointless 409).
+  const editingLms = activeLms(editing);
+  const lmsBlocksGrantRemoval = !!editingLms;
 
   return (
     <div>
@@ -192,14 +238,15 @@ export default function StudentsPage() {
               <th>Период практики</th>
               <th>Партнёр</th>
               <th>На гранте</th>
+              <th>LMS-договор</th>
               {isAdmin && <th className="text-right">Действия</th>}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={isAdmin ? 9 : 8} className="text-center py-6 text-slate-500">Загрузка…</td></tr>
+              <tr><td colSpan={isAdmin ? 10 : 9} className="text-center py-6 text-slate-500">Загрузка…</td></tr>
             ) : items.length === 0 ? (
-              <tr><td colSpan={isAdmin ? 9 : 8} className="text-center py-6 text-slate-500">Студентов пока нет.</td></tr>
+              <tr><td colSpan={isAdmin ? 10 : 9} className="text-center py-6 text-slate-500">Студентов пока нет.</td></tr>
             ) : (
               items.map((s) => (
                 <tr key={s.id}>
@@ -216,13 +263,22 @@ export default function StudentsPage() {
                     {isAdmin ? (
                       <label
                         className="inline-flex items-center gap-2 cursor-pointer select-none"
-                        title="Перевести в категорию грантников / снять отметку"
+                        title={
+                          s.is_grant_student && activeLms(s)
+                            ? `Отметку нельзя снять: есть незавершённый LMS-договор ${
+                                activeLms(s).number || `LMS-${activeLms(s).id}`
+                              }. Завершите или удалите договор.`
+                            : "Перевести в категорию грантников / снять отметку"
+                        }
                       >
                         <input
                           type="checkbox"
                           className="h-4 w-4"
                           checked={!!s.is_grant_student}
-                          disabled={grantBusy === s.id}
+                          disabled={
+                            grantBusy === s.id ||
+                            (s.is_grant_student && !!activeLms(s))
+                          }
                           onChange={() => onToggleGrant(s)}
                         />
                         {s.is_grant_student ? (
@@ -241,17 +297,49 @@ export default function StudentsPage() {
                       "—"
                     )}
                   </td>
+                  {/* Makes the invisible link visible: this is why the student
+                      is absent from the LMS create-picker and why the card
+                      refuses to delete. */}
+                  <td>
+                    {s.lms_contract ? (
+                      <Link
+                        to={`/lms-contracts/${s.lms_contract.id}`}
+                        className="text-xs font-semibold text-coral-700 hover:underline"
+                        title={
+                          s.lms_contract.is_active
+                            ? "Договор не завершён: студент скрыт из мастера создания и карточку нельзя удалить"
+                            : "Договор завершён, но карточку нельзя удалить, пока он существует"
+                        }
+                      >
+                        {s.lms_contract.number || `LMS-${s.lms_contract.id} (без номера)`}
+                        <span className="block font-normal text-[11px] text-charcoal-500">
+                          {s.lms_contract.status_label || s.lms_contract.status}
+                        </span>
+                      </Link>
+                    ) : (
+                      <span className="text-xs text-slate-400">—</span>
+                    )}
+                  </td>
                   {isAdmin && (
                     <td className="text-right whitespace-nowrap">
-                      {s.is_grant_student && (
-                        <button
-                          className="btn-ghost text-orange-600"
-                          onClick={() => onQuickCreateLms(s)}
-                          title="Открыть форму создания LMS-договора с этим студентом"
-                        >
-                          Создать LMS-договор
-                        </button>
-                      )}
+                      {s.is_grant_student &&
+                        (activeLms(s) ? (
+                          <button
+                            className="btn-ghost text-coral-700"
+                            onClick={() => navigate(`/lms-contracts/${activeLms(s).id}`)}
+                            title="У студента уже есть незавершённый LMS-договор"
+                          >
+                            Открыть LMS-договор
+                          </button>
+                        ) : (
+                          <button
+                            className="btn-ghost text-orange-600"
+                            onClick={() => onQuickCreateLms(s)}
+                            title="Открыть форму создания LMS-договора с этим студентом"
+                          >
+                            Создать LMS-договор
+                          </button>
+                        ))}
                       <button className="btn-ghost" onClick={() => openEditor({ ...EMPTY, ...s })}>Изм.</button>
                       <button className="btn-ghost text-red-600" onClick={() => onDelete(s)}>Удалить</button>
                     </td>
@@ -279,6 +367,24 @@ export default function StudentsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <TextField label="ФИО студента *" value={editing.full_name} onChange={(v) => setEditing({ ...editing, full_name: v })} />
             <TextField label="ИИН" value={editing.iin} onChange={(v) => setEditing({ ...editing, iin: v })} />
+            {/* Was missing entirely: every student created here was born
+                non-grant and therefore invisible in the LMS create-picker. */}
+            <div className="md:col-span-2">
+              <CheckboxField
+                label="Категория финансирования"
+                text="Грантник (госзаказ) — доступен LMS-договор"
+                checked={!!editing.is_grant_student}
+                disabled={editing.is_grant_student && lmsBlocksGrantRemoval}
+                onChange={(v) => setEditing({ ...editing, is_grant_student: v })}
+                hint={
+                  editing.is_grant_student && lmsBlocksGrantRemoval
+                    ? `Отметку нельзя снять: есть незавершённый LMS-договор ${
+                        editingLms?.number || `LMS-${editingLms?.id}`
+                      }. Завершите или удалите договор.`
+                    : "Только у грантников можно оформить договор о подключении к Caspian Digital."
+                }
+              />
+            </div>
             <TextField label="Группа" value={editing.group_name} onChange={(v) => setEditing({ ...editing, group_name: v })} />
             <TextField label="Специальность" value={editing.specialty} onChange={(v) => setEditing({ ...editing, specialty: v })} />
             <TextField label="Код специальности" value={editing.specialty_code} onChange={(v) => setEditing({ ...editing, specialty_code: v })} />
