@@ -187,6 +187,16 @@ export const lmsContractsApi = {
     client.get("/lms-contracts/suggest-number", { params: { year } }).then((r) => r.data),
   grantStudents: () =>
     client.get("/lms-contracts/grant-students").then((r) => r.data),
+  // Contracts whose applicant snapshot disagrees with the linked Student.
+  linkAudit: () => client.get("/lms-contracts/link-audit").then((r) => r.data),
+  // Re-attach a contract to the student it actually belongs to.
+  relinkStudent: (id, studentId, resyncSnapshot = false) =>
+    client
+      .put(`/lms-contracts/${id}/student`, {
+        student_id: studentId,
+        resync_snapshot: !!resyncSnapshot,
+      })
+      .then((r) => r.data),
   create: (data) => client.post("/lms-contracts", data).then((r) => r.data),
   update: (id, data) => client.put(`/lms-contracts/${id}`, data).then((r) => r.data),
   generate: (id, payload) =>

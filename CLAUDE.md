@@ -208,6 +208,15 @@ builder and regenerate, or the change is lost on the next rebuild.
   5. `GET /api/students?with_lms=1` attaches a compact `lms_contract` summary
      (one query, no N+1). The list badge and `delete_student` order candidates
      identically, so they always name the same contract.
+  6. `applicant_*` is an **editable snapshot** of the linked student, not a
+     second identity. It can drift (`update_lms` may rewrite the ФИО while
+     `student_id` stays put), so: `link_mismatch()` reports the drift,
+     `to_dict(include_relations=True)` carries the linked `student`, the
+     students list sets `lms_contract.applicant_matches`, `GET
+     /lms-contracts/link-audit` lists every drifted row, and `PUT
+     /lms-contracts/<id>/student` re-links (grant-only, no active clash).
+     `update_lms` refuses an `applicant_iin` that belongs to a different
+     Student (409 `iin_belongs_to_other_student`).
 
 ---
 

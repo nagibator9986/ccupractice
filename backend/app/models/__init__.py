@@ -28,6 +28,7 @@ from .lms_contract import (
     LmsSignature,
     LmsSigningRequest,
     LmsStatus,
+    link_mismatch,
     lms_signing_matrix,
     suggest_lms_number,
 )
@@ -64,4 +65,5 @@ __all__ = [
     "LmsStatus",
     "lms_signing_matrix",
     "suggest_lms_number",
+    "link_mismatch",
 ]

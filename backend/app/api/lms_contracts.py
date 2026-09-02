@@ -30,6 +30,7 @@ from ..models import (
     PARTY_LABELS,
     PARTY_PARENT,
     Student,
+    link_mismatch,
     suggest_lms_number,
 )
 from ..services.lms_documents import generate_lms_files
@@ -185,6 +186,96 @@ def grant_students():
     return jsonify(items=[s.to_dict() for s in items], total=len(items))
 
 
+@bp.get("/link-audit")
+@admin_required
+def link_audit():
+    """Contracts whose applicant snapshot disagrees with the Student they are
+    attached to.
+
+    `applicant_*` is an editable snapshot while `student_id` is the real link,
+    and nothing kept them together: editing the ФИО on the contract page turned
+    it into a different person, but the students table went on linking to it.
+    This lists every such row so an admin can repair them.
+    """
+    rows = (
+        LmsContract.query
+        .outerjoin(Student, LmsContract.student_id == Student.id)
+        .order_by(LmsContract.created_at.desc())
+        .all()
+    )
+    items = []
+    for lms in rows:
+        mismatch = link_mismatch(lms, lms.student)
+        if mismatch is None:
+            continue
+        items.append({
+            "id": lms.id,
+            "number": lms.number,
+            "status": lms.status,
+            "status_label": LmsStatus.LABELS.get(lms.status, lms.status),
+            "applicant_full_name": lms.applicant_full_name,
+            "applicant_iin": lms.applicant_iin,
+            "student_id": lms.student_id,
+            "mismatch": mismatch,
+        })
+    return jsonify(items=items, total=len(items), checked=len(rows))
+
+
+@bp.put("/<int:lid>/student")
+@admin_required
+def relink_student(lid):
+    """Re-attach a contract to the Student it actually belongs to.
+
+    The repair for a drifted link. Enforces the same invariants as creation:
+    the target must be a grant student and must not already hold another
+    unfinished contract.
+    """
+    lms = LmsContract.query.get_or_404(lid)
+    data = get_json_safe()
+    sid = parse_int(data.get("student_id"))
+    if not sid:
+        return jsonify(error="Не указан студент"), 400
+    student = Student.query.get(sid)
+    if student is None:
+        return jsonify(error="Студент не найден"), 404
+    if sid == lms.student_id:
+        return jsonify(item=lms.to_dict(include_relations=True))
+    if not student.is_grant_student:
+        return jsonify(
+            error="LMS-договор можно привязать только к студенту-грантнику. "
+                  "Включите «Грантник (госзаказ)» на его карточке.",
+            code="not_grant_student",
+        ), 422
+    clash = (
+        LmsContract.query
+        .filter(LmsContract.student_id == sid, LmsContract.id != lid)
+        .filter(LmsContract.status != LmsStatus.COMPLETED)
+        .first()
+    )
+    if clash is not None:
+        return jsonify(
+            error=f"У студента «{student.full_name}» уже есть незавершённый "
+                  f"LMS-договор {'№ ' + clash.number if clash.number else f'LMS-{clash.id}'}. "
+                  "Завершите или удалите его, затем повторите привязку.",
+            code="lms_contract_active",
+            lms_contract_id=clash.id,
+            lms_contract_number=clash.number,
+        ), 409
+
+    lms.student_id = student.id
+    if bool(data.get("resync_snapshot")):
+        # Optional: pull the applicant identity back from the Student row.
+        _snapshot_from_student(lms, student)
+        lms.applicant_full_name = student.full_name or lms.applicant_full_name
+        lms.applicant_iin = student.iin or lms.applicant_iin
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify(error="Не удалось перепривязать договор"), 409
+    return jsonify(item=lms.to_dict(include_relations=True))
+
+
 @bp.get("/<int:lid>")
 @jwt_required()
 def get_lms(lid):
@@ -298,6 +389,30 @@ def create_lms():
 def update_lms(lid):
     lms = LmsContract.query.get_or_404(lid)
     data = get_json_safe()
+
+    # The applicant block is a snapshot of the LINKED student, editable so an
+    # admin can fix a typo. Re-typing it into a *different* person is the one
+    # thing it must not do: `student_id` would stay behind, the students table
+    # would keep linking here, and the contract would show someone who may not
+    # even be in the registry. An ИИН that belongs to another Student row is
+    # the unambiguous signal — refuse and point at the re-link action instead.
+    if "applicant_iin" in data:
+        new_iin = _normalize_iin(data.get("applicant_iin"))
+        current = lms.student
+        if new_iin and current is not None and _normalize_iin(current.iin) != new_iin:
+            other = Student.query.filter_by(iin=new_iin).first()
+            if other is not None and other.id != lms.student_id:
+                return jsonify(
+                    error=f"ИИН {new_iin} принадлежит другому студенту "
+                          f"(«{other.full_name}»), а договор привязан к "
+                          f"«{current.full_name}». Исправьте ИИН или перепривяжите "
+                          "договор к нужному студенту.",
+                    code="iin_belongs_to_other_student",
+                    linked_student_id=current.id,
+                    linked_student_name=current.full_name,
+                    other_student_id=other.id,
+                    other_student_name=other.full_name,
+                ), 409
 
     # The signer party (and the whole signing matrix / is_fully_signed) is
     # derived live from applicant_birth_date and contract_date. Once a party

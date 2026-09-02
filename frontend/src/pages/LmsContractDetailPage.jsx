@@ -4,7 +4,8 @@ import toast from "react-hot-toast";
 import PageHeader from "../components/PageHeader.jsx";
 import { TextField, SelectField, TextArea } from "../components/Field.jsx";
 import VerificationBadge from "../components/VerificationBadge.jsx";
-import { lmsContractsApi } from "../api/endpoints.js";
+import Modal from "../components/Modal.jsx";
+import { lmsContractsApi, studentsApi } from "../api/endpoints.js";
 import { formatDate, formatDateTime } from "../utils/format.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { StatusPill } from "./EnrollmentsPage.jsx";
@@ -156,6 +157,37 @@ export default function LmsContractDetailPage() {
     }
   }
 
+  // ── Re-link repair ────────────────────────────────────────────────────────
+  // `applicant_*` is an editable snapshot while `student_id` is the real link;
+  // editing the ФИО used to silently point the students table at a stranger.
+  const [relinking, setRelinking] = useState(null); // {q, results, busy}
+
+  async function searchStudents(q) {
+    setRelinking((r) => ({ ...r, q, busy: true }));
+    try {
+      const d = await studentsApi.list({ q });
+      setRelinking((r) => (r ? { ...r, results: d.items || [], busy: false } : r));
+    } catch {
+      setRelinking((r) => (r ? { ...r, results: [], busy: false } : r));
+    }
+  }
+
+  async function relinkTo(student) {
+    const resync = window.confirm(
+      `Привязать договор к «${student.full_name}»?\n\n` +
+        "OK — также переписать ФИО/ИИН в договоре по карточке студента.\n" +
+        "Отмена — только сменить привязку, данные в договоре оставить как есть.",
+    );
+    try {
+      await lmsContractsApi.relinkStudent(id, student.id, resync);
+      toast.success("Договор перепривязан");
+      setRelinking(null);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || "Не удалось перепривязать договор");
+    }
+  }
+
   async function removeLms() {
     if (!window.confirm("Удалить LMS-договор? Это действие необратимо.")) return;
     try {
@@ -232,6 +264,50 @@ export default function LmsContractDetailPage() {
           </Link>
         </div>
       )}
+
+      {/* Who this contract is actually attached to. Without this the page
+          showed only the editable applicant snapshot, so a drifted link was
+          invisible from here and from the students table alike. */}
+      <div
+        className={`rounded-xl px-3 py-2 mb-4 text-xs ring-1 ${
+          item.link_mismatch
+            ? "bg-red-50 text-red-800 ring-red-200"
+            : "bg-charcoal-50/60 text-charcoal-600 ring-charcoal-100"
+        }`}
+      >
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span>{item.link_mismatch ? "⚠ Привязан к студенту:" : "Привязан к студенту:"}</span>
+          {item.student ? (
+            <Link to="/students" className="link font-semibold">
+              {item.student.full_name}
+              {item.student.iin ? ` · ИИН ${item.student.iin}` : ""}
+            </Link>
+          ) : (
+            <span className="font-semibold">— карточка студента не найдена —</span>
+          )}
+          {isAdmin && (
+            <button
+              className="btn btn-text text-xs"
+              onClick={() => setRelinking({ q: item.applicant_full_name || "", results: [], busy: false })}
+            >
+              Перепривязать
+            </button>
+          )}
+        </div>
+        {item.link_mismatch && (
+          <div className="mt-1">
+            {item.link_mismatch.reason === "student_missing"
+              ? "Договор ссылается на несуществующую карточку студента."
+              : item.link_mismatch.reason === "iin_differs"
+                ? `В договоре указан «${item.applicant_full_name || "—"}» (ИИН ${item.applicant_iin || "—"}), ` +
+                  `а привязан он к «${item.link_mismatch.student_full_name}» (ИИН ${item.link_mismatch.student_iin || "—"}). ` +
+                  "Это разные люди — перепривяжите договор или исправьте данные."
+                : `В договоре указан «${item.applicant_full_name || "—"}», ` +
+                  `а привязан он к «${item.link_mismatch.student_full_name}». ` +
+                  "Если это один человек — поправьте ФИО; если разные — перепривяжите договор."}
+          </div>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 flex flex-col gap-4">
@@ -410,6 +486,57 @@ export default function LmsContractDetailPage() {
           )}
         </div>
       </div>
+
+      <Modal
+        open={!!relinking}
+        onClose={() => setRelinking(null)}
+        title="Перепривязать договор к студенту"
+        footer={
+          <button className="btn btn-secondary" onClick={() => setRelinking(null)}>
+            Закрыть
+          </button>
+        }
+      >
+        {relinking && (
+          <div>
+            <TextField
+              label="Поиск студента"
+              placeholder="ФИО, ИИН, специальность…"
+              value={relinking.q}
+              onChange={(v) => searchStudents(v)}
+              hint="Договор можно привязать только к студенту с отметкой «Грантник» и без другого незавершённого договора."
+            />
+            <div className="mt-3 max-h-72 overflow-y-auto divide-y divide-charcoal-100">
+              {relinking.busy && <div className="py-3 text-xs text-charcoal-500">Поиск…</div>}
+              {!relinking.busy && !relinking.results.length && (
+                <div className="py-3 text-xs text-charcoal-500">
+                  Ничего не найдено. Если нужного студента нет в реестре — сначала
+                  добавьте его на вкладке «Студенты».
+                </div>
+              )}
+              {relinking.results.map((st) => (
+                <button
+                  key={st.id}
+                  className="flex w-full items-center justify-between gap-3 py-2 text-left hover:bg-coral-50/40"
+                  onClick={() => relinkTo(st)}
+                >
+                  <span>
+                    <span className="font-medium">{st.full_name}</span>
+                    <span className="block text-[11px] text-charcoal-500">
+                      ИИН {st.iin || "—"}
+                      {st.is_grant_student ? " · Грантник" : " · не грантник"}
+                      {st.id === item.student_id ? " · текущая привязка" : ""}
+                    </span>
+                  </span>
+                  {st.id !== item.student_id && (
+                    <span className="text-xs text-coral-700">Привязать →</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

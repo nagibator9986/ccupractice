@@ -302,6 +302,7 @@ export default function StudentsPage() {
                       refuses to delete. */}
                   <td>
                     {s.lms_contract ? (
+                      <>
                       <Link
                         to={`/lms-contracts/${s.lms_contract.id}`}
                         className="text-xs font-semibold text-coral-700 hover:underline"
@@ -316,6 +317,19 @@ export default function StudentsPage() {
                           {s.lms_contract.status_label || s.lms_contract.status}
                         </span>
                       </Link>
+                      {/* The applicant block on the contract is an editable
+                          snapshot, so it can name someone else entirely. Say so
+                          here instead of letting the admin open the contract
+                          and find a stranger. */}
+                      {s.lms_contract.applicant_matches === false && (
+                        <span
+                          className="mt-1 block rounded-md bg-red-50 px-1.5 py-1 text-[11px] font-semibold text-red-700 ring-1 ring-red-200"
+                          title="ФИО в договоре не совпадает с карточкой студента — договор, скорее всего, привязан не к тому студенту"
+                        >
+                          ⚠ в договоре: {s.lms_contract.applicant_full_name || "—"}
+                        </span>
+                      )}
+                      </>
                     ) : (
                       <span className="text-xs text-slate-400">—</span>
                     )}

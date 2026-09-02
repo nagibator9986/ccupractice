@@ -111,13 +111,14 @@ def _attach_lms_summary(payload: list[dict]) -> None:
             LmsContract.number,
             LmsContract.status,
             LmsContract.student_id,
+            LmsContract.applicant_full_name,
         )
         .filter(LmsContract.student_id.in_(ids))
         .order_by(LmsContract.created_at.desc())
         .all()
     )
     by_student: dict[int, dict] = {}
-    for lid, number, status, student_id in rows:
+    for lid, number, status, student_id, applicant_full_name in rows:
         is_active = status != LmsStatus.COMPLETED
         held = by_student.get(student_id)
         # Newest wins, but an unfinished contract always outranks a completed
@@ -130,9 +131,23 @@ def _attach_lms_summary(payload: list[dict]) -> None:
                 "status": status,
                 "status_label": LmsStatus.LABELS.get(status, status),
                 "is_active": is_active,
+                "applicant_full_name": applicant_full_name,
             }
     for item in payload:
-        item["lms_contract"] = by_student.get(item["id"])
+        summary = by_student.get(item["id"])
+        if summary is not None:
+            # The applicant block is an editable snapshot, so it can name
+            # someone other than this student. Flag it here rather than let the
+            # admin discover it by opening the contract and finding a stranger.
+            summary = dict(summary)
+            summary["applicant_matches"] = _same_person(
+                summary.get("applicant_full_name"), item.get("full_name")
+            )
+        item["lms_contract"] = summary
+
+
+def _same_person(a, b) -> bool:
+    return " ".join(str(a or "").split()).casefold() == " ".join(str(b or "").split()).casefold()
 
 
 @bp.get("/<int:sid>")

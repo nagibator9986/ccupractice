@@ -70,6 +70,45 @@ class LmsStatus:
     }
 
 
+def _norm_name(value) -> str:
+    """Casefolded, whitespace-collapsed name for comparison only."""
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _norm_iin(value) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def link_mismatch(lms, student) -> dict | None:
+    """Describe how an LmsContract's applicant snapshot disagrees with the
+    Student row it is attached to — or None when they agree.
+
+    `applicant_*` is deliberately editable (an admin must be able to fix a typo
+    without touching the shared Student row), but nothing tied the two
+    together, so editing the ФИО silently turned the contract into a different
+    person while the student card kept linking to it. `iin` is the strong
+    signal — two different non-empty ИИН are different people; a differing name
+    alone is more often a correction, so it is reported at a lower severity.
+    """
+    if student is None:
+        return {"reason": "student_missing", "severity": "error",
+                "student_full_name": None, "student_iin": None}
+    a_iin, s_iin = _norm_iin(lms.applicant_iin), _norm_iin(student.iin)
+    a_name, s_name = _norm_name(lms.applicant_full_name), _norm_name(student.full_name)
+    if a_iin and s_iin and a_iin != s_iin:
+        reason, severity = "iin_differs", "error"
+    elif a_name and s_name and a_name != s_name:
+        reason, severity = "name_differs", "warning"
+    else:
+        return None
+    return {
+        "reason": reason,
+        "severity": severity,
+        "student_full_name": student.full_name,
+        "student_iin": student.iin,
+    }
+
+
 _LMS_NUM_SEQ_RE = re.compile(r"-(\d+)\s*$")
 
 
@@ -361,6 +400,20 @@ class LmsContract(db.Model):
         if include_relations:
             data["signatures"] = [s.to_dict() for s in (self.signatures or [])]
             data["signing_requests"] = [r.to_dict() for r in (self.signing_requests or [])]
+            # WHO this contract is actually attached to. The applicant_* block
+            # is a snapshot that an admin may edit, so it can drift away from
+            # the linked Student — and until this was exposed, that drift was
+            # invisible: the page showed the snapshot, the students table showed
+            # the link, and neither mentioned the other. Only under
+            # include_relations (the detail endpoint) so the list stays 1 query.
+            student = self.student
+            data["student"] = None if student is None else {
+                "id": student.id,
+                "full_name": student.full_name,
+                "iin": student.iin,
+                "is_grant_student": bool(student.is_grant_student),
+            }
+            data["link_mismatch"] = link_mismatch(self, student)
         return data
 
 
