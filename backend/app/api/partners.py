@@ -1,10 +1,13 @@
+from datetime import date
+
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from ..extensions import db
 from ..models import Partner, Student, Contract
 from ..utils.auth import admin_required
+from ..utils.time import utc_today
 from ..utils.serializers import (
     clean_str,
     get_json_safe,
@@ -50,7 +53,44 @@ def list_partners():
             )
         )
     items = query.order_by(Partner.organization_name.asc()).all()
-    return jsonify(items=[p.to_dict() for p in items], total=len(items))
+    payload = [p.to_dict() for p in items]
+    # Opt-in capacity/validity numbers: how many students are placed with each
+    # partner, how many contracts exist, and whether the partnership lapsed.
+    if (request.args.get("with_stats") or "").strip().lower() in ("1", "true", "yes"):
+        _attach_stats(payload)
+    return jsonify(items=payload, total=len(payload))
+
+
+def _attach_stats(payload: list[dict]) -> None:
+    today = utc_today()
+    students = dict(
+        db.session.query(Student.partner_id, func.count(Student.id))
+        .filter(Student.partner_id.isnot(None)).group_by(Student.partner_id).all()
+    )
+    contract_rows = (
+        db.session.query(Contract.partner_id, Contract.status, func.count(Contract.id))
+        .group_by(Contract.partner_id, Contract.status).all()
+    )
+    contracts: dict[int, dict[str, int]] = {}
+    for pid, status, n in contract_rows:
+        contracts.setdefault(pid, {})[status] = n
+    for item in payload:
+        by_status = contracts.get(item["id"], {})
+        total = sum(by_status.values())
+        seats = item.get("seats_count") or 0
+        placed = students.get(item["id"], 0)
+        valid_until = item.get("contract_valid_until")
+        validity = None
+        if valid_until:
+            days = (date.fromisoformat(valid_until) - today).days
+            validity = "expired" if days < 0 else ("soon" if days <= 30 else "ok")
+        item["students_count"] = placed
+        item["contracts_count"] = total
+        item["contracts_by_status"] = by_status
+        item["seats_free"] = max(seats - placed, 0) if seats else None
+        item["overbooked"] = bool(seats and placed > seats)
+        item["validity"] = validity
+        item["valid_days_left"] = (date.fromisoformat(valid_until) - today).days if valid_until else None
 
 
 @bp.get("/<int:pid>")

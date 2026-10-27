@@ -1,230 +1,299 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import {
+  Archive,
+  Building2,
+  Database,
+  ExternalLink,
+  FileSignature,
+  GraduationCap,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  MonitorSmartphone,
+  ScrollText,
+  Settings,
+  ShieldCheck,
+  Users,
+  X,
+} from "lucide-react";
+import clsx from "clsx";
 import { useAuth } from "../context/AuthContext.jsx";
+import useDialog from "../hooks/useDialog.js";
+import { initials } from "../utils/format.js";
 import BrandLogo from "./BrandLogo.jsx";
 import PersistenceBanner from "./PersistenceBanner.jsx";
-import clsx from "clsx";
 
-const NAV = [
-  { to: "/", label: "Дашборд", icon: DashboardIcon, end: true },
-  { to: "/partners", label: "Партнёры", icon: PartnersIcon },
-  { to: "/students", label: "Студенты", icon: StudentsIcon },
-  { to: "/contracts", label: "Договоры практики", icon: ContractsIcon },
-  { to: "/enrollments", label: "Договоры со студентами", icon: EnrollmentIcon },
-  { to: "/lms-contracts", label: "LMS-договоры", icon: LmsIcon, chip: "Грантники" },
-  { to: "/archive", label: "Электронный архив", icon: ArchiveIcon },
-  { to: "/data", label: "Данные", icon: DataIcon, adminOnly: true },
-  { to: "/settings", label: "Настройки", icon: SettingsIcon, adminOnly: true },
+// `/groups` is registered by another change; the link is intentionally here already.
+const NAV_SECTIONS = [
+  {
+    label: "Практика",
+    items: [
+      { to: "/", label: "Дашборд", icon: LayoutDashboard, end: true },
+      { to: "/groups", label: "Группы", icon: Users, chip: "Новое" },
+      { to: "/students", label: "Студенты", icon: GraduationCap },
+      { to: "/partners", label: "Партнёры", icon: Building2 },
+      { to: "/contracts", label: "Договоры практики", icon: FileSignature },
+    ],
+  },
+  {
+    label: "Договоры со студентами",
+    items: [
+      { to: "/enrollments", label: "Договоры со студентами", icon: ScrollText },
+      { to: "/lms-contracts", label: "LMS-договоры", icon: MonitorSmartphone, chip: "Грантники" },
+    ],
+  },
+  {
+    label: "Система",
+    items: [
+      { to: "/archive", label: "Электронный архив", icon: Archive },
+      { to: "/data", label: "Данные", icon: Database, adminOnly: true },
+      { to: "/settings", label: "Настройки", icon: Settings, adminOnly: true },
+    ],
+  },
 ];
+
+function NavItem({ item, onNavigate }) {
+  const Icon = item.icon;
+  return (
+    <NavLink
+      to={item.to}
+      end={item.end}
+      onClick={onNavigate}
+      className={({ isActive }) =>
+        clsx(
+          "group relative flex items-center gap-3 rounded-lg px-3 min-h-[44px] lg:min-h-[38px] text-sm font-medium transition-colors",
+          isActive
+            ? "bg-coral-50 text-coral-700"
+            : "text-charcoal-600 hover:bg-charcoal-50 hover:text-charcoal-900",
+        )
+      }
+    >
+      {({ isActive }) => (
+        <>
+          <span
+            className={clsx(
+              "absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-coral-500 transition-opacity",
+              isActive ? "opacity-100" : "opacity-0",
+            )}
+            aria-hidden="true"
+          />
+          <Icon
+            className={clsx(
+              "h-[18px] w-[18px] shrink-0 transition-colors",
+              isActive ? "text-coral-600" : "text-charcoal-400 group-hover:text-charcoal-600",
+            )}
+            aria-hidden="true"
+          />
+          <span className="truncate">{item.label}</span>
+          {item.chip && (
+            <span
+              className={clsx(
+                "ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                isActive ? "bg-white text-coral-700" : "bg-coral-100 text-coral-700",
+              )}
+            >
+              {item.chip}
+            </span>
+          )}
+        </>
+      )}
+    </NavLink>
+  );
+}
+
+// Shared by the desktop sidebar and the mobile drawer so the two never drift.
+function SidebarBody({ isAdmin, user, onLogout, onNavigate, onClose }) {
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2 px-5 h-16 shrink-0 border-b border-charcoal-100">
+        <BrandLogo size={36} withWordmark />
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-11 w-11 -mr-2 grid place-items-center rounded-lg text-charcoal-500 hover:bg-charcoal-100"
+            aria-label="Закрыть меню"
+          >
+            <X className="h-5 w-5" aria-hidden="true" />
+          </button>
+        )}
+      </div>
+
+      <nav className="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-5" aria-label="Основная навигация">
+        {NAV_SECTIONS.map((section) => {
+          const items = section.items.filter((n) => !n.adminOnly || isAdmin);
+          if (items.length === 0) return null;
+          return (
+            <div key={section.label}>
+              <div className="px-3 mb-1.5 text-[10px] uppercase tracking-[0.16em] font-bold text-charcoal-400">
+                {section.label}
+              </div>
+              <div className="space-y-0.5">
+                {items.map((n) => (
+                  <NavItem key={n.to} item={n} onNavigate={onNavigate} />
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </nav>
+
+      {/* Dropped on short screens so it never squeezes the navigation. */}
+      <div className="mx-3 mb-3 hidden rounded-xl bg-charcoal-50/70 p-3 ring-1 ring-charcoal-100 [@media(min-height:760px)]:block">
+        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-charcoal-700">
+          <ShieldCheck className="h-3.5 w-3.5 text-coral-600" aria-hidden="true" />
+          NCALayer
+        </div>
+        <p className="mt-1 text-xs leading-snug text-charcoal-500">
+          Подписание ЭЦП работает через приложение НУЦ РК.
+        </p>
+        <a
+          className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold link"
+          href="https://pki.gov.kz/ncalayer/"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Скачать
+          <ExternalLink className="h-3 w-3" aria-hidden="true" />
+        </a>
+      </div>
+
+      <div className="shrink-0 border-t border-charcoal-100 bg-white p-3">
+        <div className="flex items-center gap-3 px-1 pb-3">
+          <div
+            className="h-9 w-9 shrink-0 rounded-full bg-gradient-to-br from-coral-400 to-coral-600 text-white grid place-items-center text-xs font-bold"
+            aria-hidden="true"
+          >
+            {initials(user?.full_name) || "U"}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold text-charcoal-800">{user?.full_name}</div>
+            <div className="flex items-center gap-1.5 truncate text-xs text-charcoal-500">
+              <span
+                className={clsx(
+                  "inline-block h-1.5 w-1.5 rounded-full",
+                  user?.role === "admin" ? "bg-coral-500" : "bg-charcoal-400",
+                )}
+                aria-hidden="true"
+              />
+              {user?.role === "admin" ? "Администратор" : "Просмотр"}
+            </div>
+          </div>
+        </div>
+        <button type="button" onClick={onLogout} className="btn-secondary w-full btn-sm !min-h-[40px]">
+          <LogOut className="h-4 w-4" aria-hidden="true" />
+          Выйти
+        </button>
+      </div>
+    </>
+  );
+}
+
+function MobileDrawer({ open, onClose, children }) {
+  const panelRef = useRef(null);
+  // Same focus trap / Esc / scroll lock as Modal; restores focus to the hamburger.
+  useDialog(open, panelRef, onClose);
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 lg:hidden">
+      <div
+        className="absolute inset-0 bg-charcoal-900/50 backdrop-blur-sm animate-[fadeIn_150ms_ease-out]"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <div
+        ref={panelRef}
+        id="mobile-nav"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Меню навигации"
+        tabIndex={-1}
+        className="absolute inset-y-0 left-0 flex w-[86vw] max-w-[20rem] flex-col bg-white shadow-2xl outline-none animate-[drawerIn_200ms_ease-out]"
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
 
 export default function Layout() {
   const { user, logout, isAdmin } = useAuth();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Close on route change (covers back/forward and programmatic navigation).
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [pathname]);
+
+  // Resizing to desktop with the drawer open would leave body scroll locked
+  // behind an invisible (lg:hidden) overlay.
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const onChange = (e) => {
+      if (e.matches) setDrawerOpen(false);
+    };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  function handleLogout() {
+    logout();
+    navigate("/login");
+  }
 
   return (
     <div className="min-h-screen flex bg-gradient-to-br from-coral-50/30 via-white to-charcoal-50/60">
-      <aside className="w-72 hidden lg:flex flex-col bg-white border-r border-charcoal-100/80 relative">
-        {/* Brand strip */}
-        <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-coral-500 via-coral-600 to-charcoal-700" />
-
-        <div className="px-6 pt-6 pb-5 border-b border-charcoal-100">
-          <BrandLogo size={52} withWordmark />
-        </div>
-
-        <nav className="flex-1 px-3 py-5 space-y-1">
-          <div className="px-3 mb-2 text-[10px] uppercase tracking-[0.18em] font-bold text-charcoal-400">
-            Меню
-          </div>
-          {NAV.filter((n) => !n.adminOnly || isAdmin).map((n) => (
-            <NavLink
-              key={n.to}
-              to={n.to}
-              end={n.end}
-              className={({ isActive }) =>
-                clsx(
-                  "group flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition relative",
-                  isActive
-                    ? "bg-gradient-to-r from-coral-500 to-coral-600 text-white shadow-[0_8px_18px_-10px_rgba(232,90,63,0.55)]"
-                    : "text-charcoal-600 hover:bg-charcoal-50",
-                )
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <span
-                    className={clsx(
-                      "h-8 w-8 rounded-lg grid place-items-center transition",
-                      isActive
-                        ? "bg-white/20 text-white"
-                        : "bg-charcoal-50 text-charcoal-500 group-hover:bg-white group-hover:text-coral-600",
-                    )}
-                  >
-                    <n.icon className="h-4 w-4" />
-                  </span>
-                  <span>{n.label}</span>
-                  {n.chip && (
-                    <span
-                      className={clsx(
-                        "ml-auto inline-flex items-center text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-md",
-                        isActive
-                          ? "bg-white/25 text-white"
-                          : "bg-coral-100 text-coral-700",
-                      )}
-                    >
-                      {n.chip}
-                    </span>
-                  )}
-                  {isActive && !n.chip && (
-                    <span className="absolute right-3 h-1.5 w-1.5 rounded-full bg-white" />
-                  )}
-                </>
-              )}
-            </NavLink>
-          ))}
-        </nav>
-
-        <div className="mx-3 mb-3 rounded-xl bg-gradient-to-br from-coral-50 to-charcoal-50 p-4 ring-1 ring-charcoal-100">
-          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-coral-700">
-            <span className="h-1.5 w-1.5 rounded-full bg-coral-500" /> NCALayer
-          </div>
-          <p className="text-xs text-charcoal-600 mt-1.5 leading-snug">
-            Подписание ЭЦП работает через приложение НУЦ РК.
-          </p>
-          <a
-            className="text-[11px] link font-semibold mt-1.5 inline-block"
-            href="https://pki.gov.kz/ncalayer/"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Скачать ↗
-          </a>
-        </div>
-
-        <div className="px-4 py-4 border-t border-charcoal-100 bg-white">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="h-10 w-10 rounded-full bg-gradient-to-br from-coral-400 to-coral-600 text-white grid place-items-center font-bold ring-2 ring-coral-100 shadow-sm">
-              {(user?.full_name?.[0] || "U").toUpperCase()}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold truncate text-charcoal-800">{user?.full_name}</div>
-              <div className="text-xs text-charcoal-500 truncate flex items-center gap-1.5">
-                <span
-                  className={clsx(
-                    "inline-block h-1.5 w-1.5 rounded-full",
-                    user?.role === "admin" ? "bg-coral-500" : "bg-charcoal-400",
-                  )}
-                />
-                {user?.role === "admin" ? "Администратор" : "Просмотр"}
-              </div>
-            </div>
-          </div>
-          <button
-            onClick={() => {
-              logout();
-              navigate("/login");
-            }}
-            className="btn-secondary w-full"
-          >
-            Выйти
-          </button>
-        </div>
+      {/* Desktop sidebar: pinned to the viewport so the user block / logout stay reachable on long pages. */}
+      <aside className="hidden lg:flex lg:sticky lg:top-0 lg:h-screen self-start w-64 xl:w-72 shrink-0 flex-col bg-white border-r border-charcoal-100/80">
+        <SidebarBody isAdmin={isAdmin} user={user} onLogout={handleLogout} />
       </aside>
 
-      <main className="flex-1 min-w-0 overflow-y-auto">
-        <header className="lg:hidden flex items-center justify-between px-4 py-3 bg-white border-b border-charcoal-100">
-          <BrandLogo size={40} withWordmark />
-          <button onClick={logout} className="btn-ghost text-xs">Выйти</button>
+      <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)}>
+        <SidebarBody
+          isAdmin={isAdmin}
+          user={user}
+          onLogout={handleLogout}
+          onNavigate={() => setDrawerOpen(false)}
+          onClose={() => setDrawerOpen(false)}
+        />
+      </MobileDrawer>
+
+      <main className="flex-1 min-w-0 flex flex-col">
+        <header className="lg:hidden sticky top-0 z-30 flex h-14 items-center gap-1 border-b border-charcoal-100 bg-white/90 px-2 backdrop-blur">
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            className="h-11 w-11 grid place-items-center rounded-lg text-charcoal-700 hover:bg-charcoal-100"
+            aria-label="Открыть меню"
+            aria-expanded={drawerOpen}
+            aria-controls="mobile-nav"
+          >
+            <Menu className="h-5 w-5" aria-hidden="true" />
+          </button>
+          <BrandLogo size={32} withWordmark />
+          <div
+            className="ml-auto mr-2 h-8 w-8 rounded-full bg-gradient-to-br from-coral-400 to-coral-600 text-white grid place-items-center text-[11px] font-bold"
+            title={user?.full_name}
+            aria-hidden="true"
+          >
+            {initials(user?.full_name) || "U"}
+          </div>
         </header>
-        <div className="px-4 sm:px-8 py-6 lg:py-10 max-w-[1400px] mx-auto">
+
+        <div className="flex-1 w-full max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-5 lg:py-8">
           {/* Surfaces a coral alert when /api/health reports the platform is
               running on ephemeral container storage (data will vanish on next
               redeploy). Only the admin sees it — viewers can't fix it. */}
           <PersistenceBanner enabled={isAdmin} />
           <Outlet />
         </div>
-        <footer className="px-4 sm:px-8 py-6 text-center text-[11px] text-charcoal-400">
+        <footer className="px-4 sm:px-8 py-5 text-center text-[11px] text-charcoal-400">
           © {new Date().getFullYear()} College of Caspian University · CCU PRACTICUM
         </footer>
       </main>
     </div>
-  );
-}
-
-function DashboardIcon(p) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
-      <rect x="3" y="3" width="7" height="9" rx="1.5" />
-      <rect x="14" y="3" width="7" height="5" rx="1.5" />
-      <rect x="14" y="12" width="7" height="9" rx="1.5" />
-      <rect x="3" y="16" width="7" height="5" rx="1.5" />
-    </svg>
-  );
-}
-function PartnersIcon(p) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
-      <path d="M3 21h7M14 21h7M3 21V10l4-2 4 2v11M14 21V8l4-2 3 2v13" />
-      <path d="M6 13h1M6 16h1M17 11h.5M17 14h.5" />
-    </svg>
-  );
-}
-function StudentsIcon(p) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
-      <path d="M12 14l9-5-9-5-9 5 9 5z" />
-      <path d="M12 14v6M7 11.5V16c1.5 1.2 3.2 2 5 2s3.5-.8 5-2v-4.5" />
-    </svg>
-  );
-}
-function ContractsIcon(p) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
-      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
-      <path d="M14 3v5h5" />
-      <path d="M9 13h6M9 17h4" />
-    </svg>
-  );
-}
-function EnrollmentIcon(p) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
-      <path d="M22 10L12 5 2 10l10 5 10-5z" />
-      <path d="M6 12v5c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-5" />
-      <path d="M12 15v4" />
-    </svg>
-  );
-}
-function LmsIcon(p) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
-      <rect x="3" y="4" width="18" height="14" rx="2" />
-      <path d="M3 9h18" />
-      <path d="M8 13l2 2 4-4" />
-    </svg>
-  );
-}
-function ArchiveIcon(p) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
-      <rect x="3" y="4" width="18" height="4" rx="1" />
-      <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
-      <path d="M10 13h4" />
-    </svg>
-  );
-}
-function DataIcon(p) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
-      <ellipse cx="12" cy="5" rx="8" ry="3" />
-      <path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5" />
-      <path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
-    </svg>
-  );
-}
-function SettingsIcon(p) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
-    </svg>
   );
 }

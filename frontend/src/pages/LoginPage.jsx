@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
+import { Check, Lock, Mail, Scale } from "lucide-react";
 import { useAuth } from "../context/AuthContext.jsx";
 import BrandLogo from "../components/BrandLogo.jsx";
 
@@ -62,7 +63,10 @@ export default function LoginPage() {
         </div>
 
         <div className="max-w-md space-y-6">
-          <span className="pill">⚖️ Цифровой документооборот</span>
+          <span className="pill">
+            <Scale className="h-3.5 w-3.5" aria-hidden="true" />
+            Цифровой документооборот
+          </span>
           <h1 className="font-serif text-4xl xl:text-5xl font-bold leading-tight">
             Договоры профессиональной практики со скоростью клика
           </h1>
@@ -93,7 +97,7 @@ export default function LoginPage() {
             <BrandLogo size={64} withWordmark />
           </div>
 
-          <div className="card-elev p-8">
+          <div className="card-elev p-5 sm:p-8">
             <div className="mb-7">
               <span className="chip">Вход в систему</span>
               <h2 className="font-serif text-3xl font-bold mt-3 text-charcoal-900">С возвращением</h2>
@@ -103,10 +107,12 @@ export default function LoginPage() {
             </div>
             <form onSubmit={onSubmit} className="space-y-4">
               <div>
-                <label className="label">Электронная почта</label>
+                <label className="label" htmlFor="login-email">Электронная почта</label>
                 <div className="relative">
                   <input
+                    id="login-email"
                     type="email"
+                    autoComplete="username"
                     className="input pl-10"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -114,21 +120,23 @@ export default function LoginPage() {
                     autoFocus
                     placeholder="you@ccu.kz"
                   />
-                  <MailIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-charcoal-400" />
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-charcoal-400" aria-hidden="true" />
                 </div>
               </div>
               <div>
-                <label className="label">Пароль</label>
+                <label className="label" htmlFor="login-password">Пароль</label>
                 <div className="relative">
                   <input
+                    id="login-password"
                     type="password"
+                    autoComplete="current-password"
                     className="input pl-10"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required
                     placeholder="••••••••"
                   />
-                  <LockIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-charcoal-400" />
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-charcoal-400" aria-hidden="true" />
                 </div>
               </div>
               <button type="submit" className="btn-primary w-full mt-2 text-base py-3" disabled={loading}>
@@ -163,26 +171,10 @@ export default function LoginPage() {
 function Feature({ children }) {
   return (
     <li className="flex items-start gap-2.5">
-      <span className="mt-0.5 h-5 w-5 rounded-full bg-white/15 grid place-items-center text-[10px]">✓</span>
+      <span className="mt-0.5 h-5 w-5 shrink-0 rounded-full bg-white/15 grid place-items-center" aria-hidden="true">
+        <Check className="h-3 w-3" />
+      </span>
       <span>{children}</span>
     </li>
-  );
-}
-
-function MailIcon(props) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <rect x="3" y="5" width="18" height="14" rx="2" />
-      <path d="M3 7l9 6 9-6" />
-    </svg>
-  );
-}
-
-function LockIcon(props) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <rect x="4" y="11" width="16" height="10" rx="2" />
-      <path d="M8 11V8a4 4 0 1 1 8 0v3" />
-    </svg>
   );
 }

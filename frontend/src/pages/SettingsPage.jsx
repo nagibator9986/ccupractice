@@ -1,8 +1,13 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import toast from "react-hot-toast";
+import { Building2, FileText, RefreshCw, Save, TriangleAlert } from "lucide-react";
 import PageHeader from "../components/PageHeader.jsx";
+import SectionCard from "../components/SectionCard.jsx";
+import EmptyState from "../components/EmptyState.jsx";
+import { CardSkeleton } from "../components/Skeleton.jsx";
 import { TextField } from "../components/Field.jsx";
-import { settingsApi } from "../api/endpoints.js";
+import { errorText, settingsApi } from "../api/endpoints.js";
+import { formatBytes } from "../utils/format.js";
 import { useAuth } from "../context/AuthContext.jsx";
 
 export default function SettingsPage() {
@@ -12,21 +17,23 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const { item } = await settingsApi.getCollege();
-        setData(item);
-        const info = await settingsApi.templateInfo();
-        setTemplateInfo(info);
-      } catch (e) {
-        const s = e.response?.status;
-        setLoadError(true);
-        if (s !== 401 && s !== 422)
-          toast.error(e.response?.data?.error || "Не удалось загрузить настройки");
-      }
-    })();
+  const load = useCallback(async () => {
+    setLoadError(false);
+    try {
+      const { item } = await settingsApi.getCollege();
+      setData(item);
+      const info = await settingsApi.templateInfo();
+      setTemplateInfo(info);
+    } catch (e) {
+      const s = e.response?.status;
+      setLoadError(true);
+      if (s !== 401 && s !== 422) toast.error(await errorText(e, "Не удалось загрузить настройки"));
+    }
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   async function onSave() {
     if (!(data.name_ru || "").trim()) {
@@ -39,7 +46,7 @@ export default function SettingsPage() {
       setData(item);
       toast.success("Настройки сохранены");
     } catch (e) {
-      toast.error(e.response?.data?.error || "Не удалось сохранить настройки");
+      toast.error(await errorText(e, "Не удалось сохранить настройки"));
     } finally {
       setBusy(false);
     }
@@ -60,7 +67,7 @@ export default function SettingsPage() {
       setTemplateInfo(info);
       toast.success("Шаблон загружен");
     } catch (e) {
-      toast.error(e.response?.data?.error || "Не удалось загрузить шаблон");
+      toast.error(await errorText(e, "Не удалось загрузить шаблон"));
     } finally {
       setBusy(false);
       event.target.value = "";
@@ -69,11 +76,27 @@ export default function SettingsPage() {
 
   if (loadError && !data)
     return (
-      <div className="text-red-600">
-        Не удалось загрузить настройки. Обновите страницу и попробуйте снова.
+      <div className="card">
+        <EmptyState
+          icon={TriangleAlert}
+          title="Не удалось загрузить настройки"
+          description="Проверьте соединение и попробуйте ещё раз."
+          action={
+            <button type="button" className="btn-primary" onClick={load}>
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              Повторить
+            </button>
+          }
+        />
       </div>
     );
-  if (!data) return <div className="text-slate-500">Загрузка…</div>;
+  if (!data)
+    return (
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3" aria-busy="true" aria-label="Загрузка настроек">
+        <CardSkeleton lines={8} className="xl:col-span-2" />
+        <CardSkeleton lines={4} />
+      </div>
+    );
 
   return (
     <div>
@@ -83,6 +106,7 @@ export default function SettingsPage() {
         actions={
           isAdmin && (
             <button className="btn-primary" onClick={onSave} disabled={busy}>
+              <Save className="h-4 w-4" aria-hidden="true" />
               Сохранить
             </button>
           )
@@ -90,10 +114,9 @@ export default function SettingsPage() {
       />
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <section className="card p-5 xl:col-span-2">
-          <h2 className="font-semibold mb-4">Реквизиты колледжа</h2>
+        <SectionCard className="xl:col-span-2" icon={Building2} title="Реквизиты колледжа">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <TextField label="Наименование (рус.)" value={data.name_ru} onChange={(v) => setData({ ...data, name_ru: v })} />
+            <TextField label="Наименование (рус.)" required value={data.name_ru} onChange={(v) => setData({ ...data, name_ru: v })} />
             <TextField label="Наименование (қаз.)" value={data.name_kz} onChange={(v) => setData({ ...data, name_kz: v })} />
             <TextField label="ФИО директора" value={data.director_full_name} onChange={(v) => setData({ ...data, director_full_name: v })} />
             <TextField label="На основании" value={data.director_basis} onChange={(v) => setData({ ...data, director_basis: v })} />
@@ -109,40 +132,41 @@ export default function SettingsPage() {
             <TextField label="Телефон" value={data.phone} onChange={(v) => setData({ ...data, phone: v })} />
             <TextField label="Префикс номера договора" value={data.contract_prefix} onChange={(v) => setData({ ...data, contract_prefix: v })} hint="Например, «ПП» → ПП-2026-001" />
           </div>
-        </section>
+        </SectionCard>
 
-        <section className="card p-5 space-y-4">
-          <h2 className="font-semibold">Шаблон договора</h2>
-          <div className="text-sm">
-            <div className="text-slate-500 text-xs uppercase font-semibold mb-1">Текущий шаблон</div>
-            <div className="font-mono break-all">{templateInfo?.template}</div>
-            <div className="text-xs text-slate-500">
-              {templateInfo?.exists ? `Размер: ${templateInfo.size} б.` : "Файл отсутствует — будет создан автоматически."}
+        <SectionCard icon={FileText} title="Шаблон договора" className="self-start">
+          <div className="space-y-4">
+            <div className="text-sm">
+              <div className="label">Текущий шаблон</div>
+              <div className="font-mono break-all">{templateInfo?.template}</div>
+              <div className="text-xs text-charcoal-500">
+                {templateInfo?.exists ? `Размер: ${formatBytes(templateInfo.size)}` : "Файл отсутствует — будет создан автоматически."}
+              </div>
+            </div>
+
+            <label className="block">
+              <span className="label">Загрузить новый шаблон (.docx)</span>
+              <input
+                type="file"
+                accept=".docx"
+                onChange={onUpload}
+                disabled={busy || !isAdmin}
+                className="block w-full text-sm file:mr-3 file:min-h-[44px] file:rounded-xl file:border-0 file:bg-charcoal-100 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-charcoal-700 hover:file:bg-charcoal-200 sm:file:min-h-0"
+              />
+            </label>
+
+            <div className="rounded-xl bg-charcoal-50 p-3 text-xs text-charcoal-600 space-y-2">
+              <div className="font-semibold">Доступные переменные:</div>
+              <div className="font-mono leading-5 break-words">
+                {"{{ college.name_ru }}"}, {"{{ college.address }}"}, {"{{ college.bin }}"}<br/>
+                {"{{ partner.organization_name }}"}, {"{{ partner.bin }}"}, {"{{ partner.director_full_name }}"}<br/>
+                {"{{ student.full_name }}"}, {"{{ student.iin }}"}, {"{{ student.group_name }}"}<br/>
+                {"{{ student.specialty }}"}, {"{{ student.practice_start }}"}, {"{{ student.practice_end }}"}<br/>
+                {"{{ contract.number }}"}, {"{{ contract.date }}"}
+              </div>
             </div>
           </div>
-
-          <label className="block">
-            <span className="label">Загрузить новый шаблон (.docx)</span>
-            <input
-              type="file"
-              accept=".docx"
-              onChange={onUpload}
-              disabled={busy || !isAdmin}
-              className="text-sm"
-            />
-          </label>
-
-          <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600 space-y-2">
-            <div className="font-semibold">Доступные переменные:</div>
-            <div className="font-mono leading-5">
-              {"{{ college.name_ru }}"}, {"{{ college.address }}"}, {"{{ college.bin }}"}<br/>
-              {"{{ partner.organization_name }}"}, {"{{ partner.bin }}"}, {"{{ partner.director_full_name }}"}<br/>
-              {"{{ student.full_name }}"}, {"{{ student.iin }}"}, {"{{ student.group_name }}"}<br/>
-              {"{{ student.specialty }}"}, {"{{ student.practice_start }}"}, {"{{ student.practice_end }}"}<br/>
-              {"{{ contract.number }}"}, {"{{ contract.date }}"}
-            </div>
-          </div>
-        </section>
+        </SectionCard>
       </div>
     </div>
   );

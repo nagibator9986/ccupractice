@@ -20,3 +20,5 @@ cryptography==43.0.1
 asn1crypto==1.5.1
 gostcrypto==1.2.5
 psycopg2-binary==2.9.9
+# openpyxl: practice-student import by group (.xlsx) and register/links export.
+openpyxl==3.1.5

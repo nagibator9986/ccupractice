@@ -73,9 +73,23 @@ def list_students():
             )
         )
     if group:
-        query = query.filter(Student.group_name == group)
+        from .student_bulk import group_filter
+
+        query = query.filter(group_filter(Student.group_name, group))
     if partner_id:
         query = query.filter(Student.partner_id == partner_id)
+    course = parse_int(request.args.get("course"))
+    if course:
+        query = query.filter(Student.course == course)
+    if (request.args.get("no_partner") or "").strip().lower() in ("1", "true", "yes"):
+        query = query.filter(Student.partner_id.is_(None))
+    # Contract-presence filters work off Contract.student_id (one subquery, no
+    # per-row lookups).
+    contract_filter = (request.args.get("contract") or "").strip().lower()
+    if contract_filter == "none":
+        query = query.filter(~Student.id.in_(db.session.query(Contract.student_id)))
+    elif contract_filter == "any":
+        query = query.filter(Student.id.in_(db.session.query(Contract.student_id)))
 
     is_grant_param = (request.args.get("is_grant") or "").strip().lower()
     if is_grant_param in ("1", "true", "yes"):
@@ -91,6 +105,14 @@ def list_students():
     # so every existing consumer of this endpoint keeps its exact payload.
     if (request.args.get("with_lms") or "").strip().lower() in ("1", "true", "yes"):
         _attach_lms_summary(payload)
+    # Opt-in for the same reason: the practice register wants each student's
+    # newest contract (number + status) to show where they are in the pipeline.
+    if (request.args.get("with_contracts") or "").strip().lower() in ("1", "true", "yes"):
+        from .student_bulk import latest_contracts_by_student
+
+        by_student = latest_contracts_by_student([item["id"] for item in payload])
+        for item in payload:
+            item["contract"] = by_student.get(item["id"])
     return jsonify(items=payload, total=len(payload))
 
 

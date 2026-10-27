@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { TriangleAlert } from "lucide-react";
 import client from "../api/client.js";
 
 // Safari/Firefox private modes and sandboxed iframes can throw on
@@ -62,7 +63,7 @@ export default function PersistenceBanner({ enabled = true }) {
   return (
     <div className="rounded-2xl border border-coral-300 bg-coral-50 text-coral-900 p-4 mb-4 shadow-sm">
       <div className="flex items-start gap-3">
-        <div className="text-2xl leading-none mt-1">⚠️</div>
+        <TriangleAlert className="h-6 w-6 shrink-0 mt-0.5 text-coral-600" aria-hidden="true" />
         <div className="flex-1">
           <div className="font-semibold text-base">
             Внимание: данные хранятся на эфемерном диске контейнера

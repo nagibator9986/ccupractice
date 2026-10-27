@@ -5,6 +5,9 @@ Admin endpoints:
 - GET  /api/signing/contracts/<id>/requests        list signing requests
 - POST /api/signing/requests/<id>/revoke           revoke a pending signing link
 - POST /api/signing/requests/<id>/resend           reissue a fresh token
+- POST /api/signing/requests/<id>/extend           keep the same link, push its expiry
+- POST /api/signing/bulk-invite                    links for many contracts at once
+- POST /api/signing/links-export                   live links of many contracts as .xlsx
 
 Public endpoints (token-based, no JWT required):
 - GET  /api/signing/public/<token>                 contract preview + payload metadata
@@ -62,35 +65,39 @@ def _normalize_iin(value: str | None) -> str:
 # Admin: invite / list / revoke / resend
 # ────────────────────────────────────────────────────────────────
 
-@bp.post("/contracts/<int:cid>/invite")
-@admin_required
-def invite(cid: int):
-    contract = Contract.query.get_or_404(cid)
-    if not contract.docx_path:
-        return jsonify(error="Сначала сформируйте договор"), 400
+def _recipient_phone(contract: Contract, role: str) -> str:
+    """Phone to reach a signer on WhatsApp/SMS. Derived from the registers, never
+    stored on the request, so it can't drift from the student/partner card."""
+    if role == "student":
+        return (contract.student.phone if contract.student else "") or ""
+    if role == "partner":
+        return (contract.partner.phone if contract.partner else "") or ""
+    settings = CollegeSettings.query.first()
+    return (settings.phone if settings else "") or ""
 
-    data = get_json_safe()
-    # Use `is None` semantics so an explicit empty list doesn't fall back to all roles.
-    requested_roles = data.get("roles")
-    if requested_roles is None:
-        requested_roles = list(ALLOWED_ROLES)
-    elif not isinstance(requested_roles, list):
-        return jsonify(error="Поле roles должно быть массивом"), 400
 
-    custom: dict = data.get("recipients") or {}
-    force = bool(data.get("force"))
+def _request_payload(sr: SigningRequest, base: str) -> dict:
+    data = sr.to_dict(include_token=True, public_base_url=base)
+    data["recipient_phone"] = _recipient_phone(sr.contract, sr.signer_role)
+    return data
 
+
+def _issue_links(contract: Contract, roles: list, custom: dict, force: bool) -> list[SigningRequest]:
+    """Create signing links for ``roles`` (idempotent without ``force``).
+
+    Without force a role that is already signed or holds a live link is skipped,
+    so a double click never produces two live tokens for one signer.
+    """
+    cid = contract.id
     defaults = _default_recipients(contract)
 
     # Pre-compute which roles already have a completed Signature so we can
     # refuse to issue a new invite for them (otherwise a single role could be
     # signed twice via two consecutive invites).
-    signed_roles = {
-        s.signer_role for s in contract.signatures or []
-    }
+    signed_roles = {s.signer_role for s in contract.signatures or []}
 
     created = []
-    for role in requested_roles:
+    for role in roles:
         if role not in ALLOWED_ROLES:
             continue
 
@@ -129,10 +136,147 @@ def invite(cid: int):
 
     if contract.status == ContractStatus.GENERATED and created:
         contract.status = ContractStatus.SENT
+    return created
 
+
+@bp.post("/contracts/<int:cid>/invite")
+@admin_required
+def invite(cid: int):
+    contract = Contract.query.get_or_404(cid)
+    if not contract.docx_path:
+        return jsonify(error="Сначала сформируйте договор"), 400
+
+    data = get_json_safe()
+    # Use `is None` semantics so an explicit empty list doesn't fall back to all roles.
+    requested_roles = data.get("roles")
+    if requested_roles is None:
+        requested_roles = list(ALLOWED_ROLES)
+    elif not isinstance(requested_roles, list):
+        return jsonify(error="Поле roles должно быть массивом"), 400
+
+    created = _issue_links(
+        contract, requested_roles, data.get("recipients") or {}, bool(data.get("force"))
+    )
     db.session.commit()
     base = _public_base()
-    return jsonify(items=[sr.to_dict(include_token=True, public_base_url=base) for sr in created])
+    return jsonify(items=[_request_payload(sr, base) for sr in created])
+
+
+_BULK_INVITE_LIMIT = 500
+
+
+@bp.post("/bulk-invite")
+@admin_required
+def bulk_invite():
+    """Issue signing links for many contracts (default: partner + student).
+
+    The college signs from its own session, so it is not part of the default
+    set. Returns, per contract, every LIVE link for the requested roles (new
+    ones flagged ``is_new``) so the SPA can show/copy/export them in one go.
+    """
+    data = get_json_safe()
+    ids = [i for i in (data.get("contract_ids") or []) if isinstance(i, int)]
+    roles = data.get("roles")
+    if roles is None:
+        roles = ["partner", "student"]
+    if not ids or not isinstance(roles, list):
+        return jsonify(error="Не выбраны договоры"), 400
+    if len(ids) > _BULK_INVITE_LIMIT:
+        return jsonify(error=f"За один раз можно отправить не более {_BULK_INVITE_LIMIT} договоров"), 400
+
+    base = _public_base()
+    results, new_links = [], 0
+    contracts = {c.id: c for c in Contract.query.filter(Contract.id.in_(ids)).all()}
+    for cid in ids:
+        c = contracts.get(cid)
+        if c is None:
+            results.append({"contract_id": cid, "status": "skipped", "reason": "Договор не найден", "links": []})
+            continue
+        entry = {"contract_id": c.id, "number": c.number,
+                 "student_name": c.student.full_name if c.student else "",
+                 "group_name": c.student.group_name if c.student else "", "links": []}
+        if not c.docx_path:
+            entry.update(status="skipped", reason="Договор не сформирован")
+            results.append(entry)
+            continue
+        created = _issue_links(c, roles, {}, False)
+        db.session.flush()
+        new_ids = {sr.id for sr in created}
+        live = SigningRequest.query.filter(
+            SigningRequest.contract_id == c.id,
+            SigningRequest.signer_role.in_([r for r in roles if r in ALLOWED_ROLES]),
+            SigningRequest.status.in_(("pending", "viewed")),
+        ).order_by(SigningRequest.id.asc()).all()
+        for sr in live:
+            payload = _request_payload(sr, base)
+            payload["is_new"] = sr.id in new_ids
+            entry["links"].append(payload)
+        new_links += len(created)
+        signed = {s.signer_role for s in c.signatures}
+        entry.update(
+            status="ok" if entry["links"] else "skipped",
+            reason=None if entry["links"] else (
+                "Все выбранные стороны уже подписали" if set(roles) <= signed else "Нет активных ссылок"),
+        )
+        results.append(entry)
+    db.session.commit()
+    return jsonify(ok=True, new_links=new_links, items=results)
+
+
+@bp.post("/links-export")
+@admin_required
+def links_export():
+    """Live links of the given contracts as an .xlsx — one row per link, with a
+    ready-to-paste message — for distribution through WhatsApp / e-mail."""
+    from openpyxl import Workbook
+
+    from ..services.xlsx_utils import table_sheet, workbook_response
+
+    data = get_json_safe()
+    ids = [i for i in (data.get("contract_ids") or []) if isinstance(i, int)]
+    roles = [r for r in (data.get("roles") or list(ALLOWED_ROLES)) if r in ALLOWED_ROLES]
+    if not ids:
+        return jsonify(error="Не выбраны договоры"), 400
+    base = _public_base()
+    rows = []
+    q = (
+        SigningRequest.query.join(Contract)
+        .filter(SigningRequest.contract_id.in_(ids), SigningRequest.signer_role.in_(roles),
+                SigningRequest.status.in_(("pending", "viewed")))
+        .order_by(Contract.number.asc(), SigningRequest.signer_role.asc())
+    )
+    for sr in q.all():
+        c = sr.contract
+        url = f"{base.rstrip('/')}/sign/{sr.token}"
+        name = sr.recipient_name or ""
+        message = (
+            f"Здравствуйте, {name}! Просим подписать договор практики № {c.number} "
+            f"(студент: {c.student.full_name}) электронной подписью (ЭЦП, NCALayer). "
+            f"Ссылка: {url} Срок действия — до {sr.expires_at:%d.%m.%Y}."
+            if sr.expires_at else
+            f"Здравствуйте, {name}! Просим подписать договор практики № {c.number}: {url}"
+        )
+        rows.append([
+            c.number, c.student.full_name, c.student.group_name or "", ROLE_LABELS.get(sr.signer_role, sr.signer_role),
+            name, _recipient_phone(c, sr.signer_role), sr.recipient_email or "", url,
+            sr.expires_at, "Просмотрено" if sr.status == "viewed" else "Ожидает подписи", message,
+        ])
+    if not rows:
+        return jsonify(error="Нет активных ссылок для выбранных договоров. Сначала отправьте договоры на подпись."), 404
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Ссылки на подписание"
+    table_sheet(
+        ws,
+        ["№ договора", "Студент", "Группа", "Кто подписывает", "Получатель", "Телефон", "Email",
+         "Ссылка на подписание", "Действует до", "Статус", "Текст сообщения"],
+        rows, required=[True] * 11, text_columns=(6,),
+    )
+    for cell in ws["I"][1:]:
+        cell.number_format = "DD.MM.YYYY"
+    ws.column_dimensions["H"].width = 60
+    ws.column_dimensions["K"].width = 70
+    return workbook_response(wb, f"Ссылки_на_подписание_{utc_now():%Y-%m-%d}.xlsx")
 
 
 @bp.get("/contracts/<int:cid>/requests")
@@ -145,7 +289,7 @@ def list_requests(cid: int):
         .all()
     )
     base = _public_base()
-    return jsonify(items=[r.to_dict(include_token=True, public_base_url=base) for r in rows])
+    return jsonify(items=[_request_payload(r, base) for r in rows])
 
 
 @bp.post("/requests/<int:rid>/revoke")
@@ -159,7 +303,7 @@ def revoke(rid: int):
     sr.status = "revoked"
     sr.revoked_at = utc_now()
     db.session.commit()
-    return jsonify(ok=True, item=sr.to_dict(include_token=True, public_base_url=_public_base()))
+    return jsonify(ok=True, item=_request_payload(sr, _public_base()))
 
 
 @bp.post("/requests/<int:rid>/resend")
@@ -176,7 +320,21 @@ def resend(rid: int):
     # of truth: SigningRequest.DEFAULT_TTL_DAYS).
     sr.expires_at = utc_now() + timedelta(days=SigningRequest.DEFAULT_TTL_DAYS)
     db.session.commit()
-    return jsonify(item=sr.to_dict(include_token=True, public_base_url=_public_base()))
+    return jsonify(item=_request_payload(sr, _public_base()))
+
+
+@bp.post("/requests/<int:rid>/extend")
+@admin_required
+def extend(rid: int):
+    """Push the expiry of a link that has ALREADY been sent, keeping its token —
+    unlike ``resend`` this does not invalidate the URL the signer holds."""
+    sr = SigningRequest.query.get_or_404(rid)
+    if sr.status in ("signed", "revoked"):
+        return jsonify(error="Ссылка уже использована или отозвана"), 409
+    days = min(max(int(get_json_safe().get("days") or SigningRequest.DEFAULT_TTL_DAYS), 1), 180)
+    sr.expires_at = utc_now() + timedelta(days=days)
+    db.session.commit()
+    return jsonify(item=_request_payload(sr, _public_base()))
 
 
 # ────────────────────────────────────────────────────────────────
@@ -217,6 +375,9 @@ def _public_contract_payload(contract: Contract) -> dict:
             "name_ru": settings.name_ru if settings else "",
             "city": settings.city if settings else "",
             "director_full_name": settings.director_full_name if settings else "",
+            # Public contact line so an expired/revoked link says whom to call.
+            "phone": settings.phone if settings else "",
+            "email": settings.email if settings else "",
         },
         "partner": {
             "name": partner.organization_name if partner else "",
@@ -286,19 +447,43 @@ def public_view(token: str):
             "signer_role": sr.signer_role,
             "signer_role_label": ROLE_LABELS[sr.signer_role],
             "recipient_name": sr.recipient_name,
-            # recipient_iin_or_bin intentionally NOT returned — public token
-            # surfaces land in email/SMS history, Referer headers and access
-            # logs; the enrollment + LMS public flows already withhold it.
+            # The raw recipient_iin_or_bin is intentionally NOT returned — public
+            # token surfaces land in email/SMS history, Referer headers and
+            # access logs. A masked form lets the signer confirm the link is
+            # theirs without exposing the identifier.
+            "recipient_iin_or_bin_masked": _mask_iin_public(sr.recipient_iin_or_bin),
             "status": sr.status,
             "expires_at": sr.expires_at.isoformat() if sr.expires_at else None,
         },
         contract=_public_contract_payload(contract),
         signing_state=summary,
+        signing_methods=_signing_methods(contract),
         download={
             "docx": f"/api/signing/public/{token}/download/docx" if contract.docx_path else None,
             "pdf": f"/api/signing/public/{token}/download/pdf" if contract.pdf_path else None,
+            "pdf_preview": f"/api/signing/public/{token}/download/pdf?inline=1" if contract.pdf_path else None,
         },
     )
+
+
+def _signing_methods(contract: Contract) -> dict:
+    """Which ways this signer may sign. eGov mobile needs the feature switched on
+    (EGOV_SIGN_ENABLED — the college's domain must be registered with eGov first)
+    and a PDF of the contract, because that is what the phone displays."""
+    from ..services.egov_sign import is_enabled
+
+    pdf_ok = bool(contract.pdf_path) and (
+        Path(current_app.config["ARCHIVE_FOLDER"]) / contract.pdf_path
+    ).is_file()
+    enabled = is_enabled()
+    return {
+        "ncalayer": True,
+        "egov_mobile": {
+            "enabled": enabled,
+            "available": enabled and pdf_ok,
+            "reason": None if (not enabled or pdf_ok) else "pdf_missing",
+        },
+    }
 
 
 @bp.post("/public/<string:token>/view")
@@ -349,18 +534,24 @@ def public_payload(token: str):
 
 @bp.get("/public/<string:token>/download/<string:fmt>")
 def public_download(token: str, fmt: str):
+    """DOCX / PDF of the contract for the link holder (``?inline=1`` = preview).
+
+    The PDF carries the signature annex once anyone has signed, exactly like the
+    college's own download, so a signer keeps a verifiable copy.
+    """
+    from .contracts import serve_contract_pdf
+
     sr = _get_request(token)
     if not sr or sr.is_expired or sr.status == "revoked":
         return jsonify(error="Ссылка недействительна"), 404
     contract = sr.contract
-    rel = None
-    if fmt == "docx":
-        rel = contract.docx_path
-    elif fmt == "pdf":
-        rel = contract.pdf_path
-    if not rel:
-        return jsonify(error="Файл не найден"), 404
-    return send_from_directory(current_app.config["ARCHIVE_FOLDER"], rel, as_attachment=True)
+    inline = (request.args.get("inline") or "").lower() in ("1", "true", "yes")
+    archive = Path(current_app.config["ARCHIVE_FOLDER"])
+    if fmt == "docx" and contract.docx_path and (archive / contract.docx_path).is_file():
+        return send_from_directory(archive, contract.docx_path, as_attachment=True)
+    if fmt == "pdf" and contract.pdf_path and (archive / contract.pdf_path).is_file():
+        return serve_contract_pdf(contract, inline=inline, public_base=_public_base())
+    return jsonify(error="Файл не найден"), 404
 
 
 @bp.post("/public/<string:token>/submit")
@@ -403,6 +594,48 @@ def public_submit(token: str):
     except SignatureError as exc:
         return jsonify(error=str(exc)), 400
 
+    try:
+        result = record_public_signature(sr, contract, cms_b64, parsed)
+    except SignConflict:
+        return jsonify(error="Эта роль уже подписана другим запросом"), 409
+
+    return jsonify(
+        ok=True,
+        signature=result.signature.to_dict(),
+        warnings=result.warnings,
+        signing_state={
+            "your_status": "signed",
+            "all_signed": result.all_signed,
+        },
+    )
+
+
+class SignConflict(Exception):
+    """Another request signed this role first (unique constraint / DB lock)."""
+
+
+class SignRecord:
+    def __init__(self, signature, all_signed: bool, warnings: list[str]):
+        self.signature = signature
+        self.all_signed = all_signed
+        self.warnings = warnings
+
+
+def record_public_signature(
+    sr: SigningRequest,
+    contract: Contract,
+    cms_b64: str,
+    parsed,
+    *,
+    payload_format: str = "docx",
+    channel: str = "ncalayer",
+) -> SignRecord:
+    """Persist a VERIFIED signature and advance the signing request / contract.
+
+    Shared by the NCALayer submit and the eGov mobile PUT so both channels go
+    through exactly the same bookkeeping. Raises ``SignConflict`` when the role
+    was signed concurrently (the caller turns it into a 409).
+    """
     # Soft IIN/BIN match: warn (and log) if signer identity doesn't match the
     # expected recipient. We don't reject. Skip the college role entirely — the
     # director signs with their personal IIN, but the college recipient is
@@ -432,6 +665,8 @@ def public_submit(token: str):
         cms_signature=cms_b64,
         signed_payload_sha256=parsed.payload_sha256,
         verification_level=parsed.verification_level,
+        payload_format=payload_format,
+        channel=channel,
     )
     db.session.add(sig)
     try:
@@ -442,17 +677,20 @@ def public_submit(token: str):
         # the insert. OperationalError: transient SQLite "database is locked"
         # under concurrent writers. Both are safely retryable for the caller.
         db.session.rollback()
-        return jsonify(error="Эта роль уже подписана другим запросом"), 409
+        raise SignConflict()
 
     sr.status = "signed"
     sr.signed_at = utc_now()
     sr.signature_id = sig.id
+    # The signer keeps the link to download their signed copy. Without this a
+    # party who signs near the deadline would find the link "expired" the next day.
+    sr.expires_at = max(sr.expires_at or utc_now(), utc_now() + timedelta(days=SigningRequest.DEFAULT_TTL_DAYS))
 
     try:
         db.session.commit()
     except (IntegrityError, OperationalError):
         db.session.rollback()
-        return jsonify(error="Эта роль уже подписана другим запросом"), 409
+        raise SignConflict()
 
     # Auto-update contract status once all three roles are signed. Recompute from
     # the COMMITTED Signature rows in a fresh read AFTER the commit above: under
@@ -475,18 +713,11 @@ def public_submit(token: str):
         except (IntegrityError, OperationalError):
             db.session.rollback()
 
-    return jsonify(
-        ok=True,
-        signature=sig.to_dict(),
-        warnings=parsed.warnings + (
-            [f"ИИН/БИН подписанта ({actual}) не совпал с ожидаемым ({expected})"]
-            if identity_mismatch else []
-        ),
-        signing_state={
-            "your_status": "signed",
-            "all_signed": all_signed,
-        },
+    warnings = list(parsed.warnings) + (
+        [f"ИИН/БИН подписанта ({actual}) не совпал с ожидаемым ({expected})"]
+        if identity_mismatch else []
     )
+    return SignRecord(sig, all_signed, warnings)
 
 
 def _default_recipients(contract: Contract) -> dict:

@@ -44,6 +44,7 @@ from xml.etree import ElementTree as ET
 from app import create_app
 from app.extensions import db
 from app.models import Specialty, Student
+from app.utils.iin import birth_date_from_iin, iin_checksum_ok, normalize_iin
 from app.utils.time import utc_today
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -117,68 +118,6 @@ def read_sheets(path: Path) -> list[tuple[str, list[dict[str, str]]]]:
             ]
             sheets.append((sheet.get("name") or "", rows))
         return sheets
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ИИН helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-_IIN_W1 = list(range(1, 12))
-_IIN_W2 = [3, 4, 5, 6, 7, 8, 9, 10, 11, 1, 2]
-# 7th digit: century + sex. 1/2 → 18xx, 3/4 → 19xx, 5/6 → 20xx.
-_CENTURY = {"1": 1800, "2": 1800, "3": 1900, "4": 1900, "5": 2000, "6": 2000}
-
-
-def normalize_iin(value: str) -> str:
-    return "".join(ch for ch in str(value or "") if ch.isdigit())
-
-
-def iin_checksum_ok(iin: str) -> bool:
-    """Standard KZ ИИН control digit (weights w1, falling back to w2 on 10)."""
-    if len(iin) != 12 or not iin.isdigit():
-        return False
-    digits = [int(c) for c in iin]
-    total = sum(a * b for a, b in zip(digits[:11], _IIN_W1)) % 11
-    if total == 10:
-        total = sum(a * b for a, b in zip(digits[:11], _IIN_W2)) % 11
-        if total == 10:
-            return False
-    return total == digits[11]
-
-
-def birth_date_from_iin(iin: str, today: date) -> tuple[date | None, bool]:
-    """Derive the birth date from an ИИН. Returns `(date, century_inferred)`.
-
-    The century digit is authoritative when it is valid (1–6). A few ministry
-    rows carry `0` there; rather than dropping the birth date (which would
-    leave the applicant un-invitable and hide who must sign), the century is
-    inferred as the one that yields a plausible applicant age — and the caller
-    reports every inferred row so it can be checked by hand.
-    """
-    if len(iin) != 12 or not iin.isdigit():
-        return None, False
-    yy, mm, dd = int(iin[0:2]), int(iin[2:4]), int(iin[4:6])
-
-    def _make(century: int) -> date | None:
-        try:
-            return date(century + yy, mm, dd)
-        except ValueError:
-            return None
-
-    marker = iin[6]
-    if marker in _CENTURY:
-        return _make(_CENTURY[marker]), False
-
-    for century in (2000, 1900):
-        candidate = _make(century)
-        if candidate is None:
-            continue
-        age = today.year - candidate.year - (
-            (today.month, today.day) < (candidate.month, candidate.day)
-        )
-        if 13 <= age <= 70:
-            return candidate, True
-    return None, False
 
 
 # ─────────────────────────────────────────────────────────────────────────────

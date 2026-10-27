@@ -1,3 +1,5 @@
+import { CircleHelp, Link2, Lock, ShieldCheck, TriangleAlert } from "lucide-react";
+
 // Shows how strongly the server verified an ЭЦП signature, so the admin sees the
 // real assurance level per signature (RSA/ECDSA are fully verified; KZ GOST is
 // accepted with identity + validity and a best-effort document binding).
@@ -5,25 +7,25 @@ const LEVELS = {
   legal: {
     label: "Проверено НУЦ РК",
     cls: "bg-emerald-100 text-emerald-700",
-    icon: "✅",
+    icon: ShieldCheck,
     title: "Полная юридическая проверка через НУЦ РК (NCANode): подпись, цепочка сертификата до корня НУЦ и статус отзыва (OCSP/CRL).",
   },
   full: {
     label: "Проверено полностью",
     cls: "bg-emerald-100 text-emerald-700",
-    icon: "🔒",
+    icon: Lock,
     title: "Цифровая подпись (RSA/ECDSA) проверена криптографически: хэш документа и сама подпись.",
   },
   document_bound: {
     label: "ГОСТ: привязка подтверждена",
     cls: "bg-blue-100 text-blue-700",
-    icon: "🔗",
+    icon: Link2,
     title: "ГОСТ-подпись: подтверждена привязка к этому файлу (Streebog). Личность и срок действия сертификата проверены.",
   },
   accepted: {
     label: "ГОСТ: принято",
     cls: "bg-amber-100 text-amber-700",
-    icon: "⚠️",
+    icon: TriangleAlert,
     title: "ГОСТ-подпись принята по личности и сроку действия сертификата; привязку к файлу подтвердить не удалось (национальный алгоритм).",
   },
 };
@@ -31,7 +33,7 @@ const LEVELS = {
 const UNKNOWN_LEVEL = {
   label: "Уровень не определён",
   cls: "bg-charcoal-100 text-charcoal-600",
-  icon: "❓",
+  icon: CircleHelp,
 };
 
 export default function VerificationBadge({ level, className = "" }) {
@@ -47,7 +49,8 @@ export default function VerificationBadge({ level, className = "" }) {
   }
   return (
     <span className={`badge ${it.cls} ${className}`} title={it.title}>
-      {it.icon} {it.label}
+      <it.icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      {it.label}
     </span>
   );
 }

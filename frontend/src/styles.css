@@ -8,6 +8,11 @@
   html, body, #root {
     height: 100%;
   }
+  /* Reserve the scrollbar lane so locking body scroll (modals, drawer) doesn't
+     shift the page sideways. */
+  html {
+    scrollbar-gutter: stable;
+  }
   body {
     font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     color: #1F2024;
@@ -18,8 +23,14 @@
   h1, h2, h3 {
     letter-spacing: -0.01em;
   }
-  *:focus-visible {
-    outline: none;
+  /* Keyboard focus must stay visible (links, tabs, checkboxes, selects). Inputs
+     and the .btn-* family draw their own ring, so they are excluded to avoid a
+     double ring (pages use .btn-primary etc. WITHOUT the base .btn class). */
+  :where(a, button, summary, select, [role="button"], [role="tab"], [role="switch"],
+         input[type="checkbox"], input[type="radio"], input[type="file"],
+         [tabindex]:not([tabindex="-1"])):focus-visible:not(.input):not([class*="btn"]) {
+    outline: 2px solid rgb(238 122 92 / 0.7);
+    outline-offset: 2px;
   }
   ::selection {
     background: rgba(232, 90, 63, 0.20);
@@ -31,7 +42,7 @@
   /* Buttons */
   .btn {
     @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm
-           transition-all duration-200 focus-visible:ring-2 focus-visible:ring-coral-400 focus-visible:ring-offset-2
+           transition-all duration-200 focus-visible:ring-2 focus-visible:ring-coral-400/70 focus-visible:ring-offset-2
            disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98];
   }
   .btn-primary {
@@ -56,6 +67,19 @@
   .btn-dark {
     @apply btn bg-charcoal-800 text-white hover:bg-charcoal-900;
   }
+  .btn-success {
+    @apply btn bg-emerald-600 text-white hover:bg-emerald-700;
+  }
+  .btn-sm {
+    @apply gap-1.5 px-3 py-1.5 text-xs rounded-lg;
+  }
+  /* Square icon-only button; pair with aria-label. */
+  .btn-icon {
+    @apply h-9 w-9 p-0 shrink-0;
+  }
+  .btn-icon.btn-sm {
+    @apply h-8 w-8;
+  }
 
   /* Cards */
   .card {
@@ -76,6 +100,12 @@
     @apply w-full rounded-xl border border-charcoal-200 bg-white px-3.5 py-2.5 text-sm placeholder-charcoal-400 transition
            focus:border-coral-400 focus:outline-none focus:ring-4 focus:ring-coral-100;
   }
+  .input-sm {
+    @apply px-3 py-1.5 text-xs rounded-lg;
+  }
+  .input-error {
+    @apply border-red-400 focus:border-red-500 focus:ring-red-100;
+  }
   .label {
     @apply block text-[11px] font-semibold uppercase tracking-[0.14em] text-charcoal-500 mb-1.5;
   }
@@ -93,16 +123,48 @@
 
   /* Table */
   .table-default {
-    @apply min-w-full divide-y divide-charcoal-100 text-sm;
+    @apply min-w-full text-sm;
   }
   .table-default th {
-    @apply px-4 py-3 text-left font-semibold text-charcoal-500 uppercase tracking-wider text-[10px] bg-charcoal-50/60;
+    @apply px-3 py-2.5 sm:px-4 sm:py-3 text-left font-semibold text-charcoal-500 uppercase tracking-wider text-[10px] bg-charcoal-50/60 whitespace-nowrap;
   }
   .table-default td {
-    @apply px-4 py-3.5 align-middle text-charcoal-800;
+    @apply px-3 py-3 sm:px-4 sm:py-3.5 align-middle text-charcoal-800;
   }
   .table-default tbody tr {
-    @apply hover:bg-coral-50/40 transition;
+    @apply hover:bg-coral-50/40 transition-colors;
+  }
+  .table-default tbody tr + tr {
+    @apply border-t border-charcoal-100;
+  }
+  .table-default thead {
+    @apply border-b border-charcoal-100;
+  }
+  /* Tighter rows for dense lists (students, groups). */
+  .table-default.table-compact th {
+    @apply px-3 py-2;
+  }
+  .table-default.table-compact td {
+    @apply px-3 py-2;
+  }
+  /* Header stays pinned inside the scroll container (give it a max-height +
+     overflow-auto). Needs an opaque bg: translucent would show rows beneath. */
+  .table-default.table-sticky thead th {
+    @apply sticky top-0 z-10 bg-charcoal-50;
+    box-shadow: 0 1px 0 0 #e7e7e9;
+  }
+
+  .kbd {
+    @apply inline-flex items-center justify-center min-w-[1.4rem] h-5 px-1.5 rounded-md border border-charcoal-200 border-b-2 bg-white text-[10px] font-semibold text-charcoal-600 font-sans;
+  }
+
+  /* Loading placeholder; animation is disabled by the reduced-motion guard. */
+  .skeleton {
+    @apply rounded-lg bg-charcoal-100;
+    background-image: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.65) 50%, transparent 100%);
+    background-size: 200% 100%;
+    background-repeat: no-repeat;
+    animation: shimmer 1.4s ease-in-out infinite;
   }
 
   /* Misc */
@@ -135,6 +197,20 @@
   }
 }
 
+@layer utilities {
+  .no-scrollbar { scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+}
+
+/* 44px touch targets for primary controls on phones (WCAG 2.5.5 / Apple HIG). */
+@media (max-width: 639px) {
+  :is(.btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-dark, .btn-success):not(.btn-sm):not(.btn-icon) {
+    min-height: 2.75rem;
+  }
+  .btn-icon:not(.btn-sm) { height: 2.75rem; width: 2.75rem; }
+  .input:not(.input-sm) { min-height: 2.75rem; font-size: 16px; } /* 16px stops iOS zoom-on-focus */
+}
+
 /* Animations */
 @keyframes fadeIn {
   from { opacity: 0; }
@@ -143,6 +219,18 @@
 @keyframes slideUp {
   from { opacity: 0; transform: translateY(10px) scale(0.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes sheetUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes drawerIn {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
 }
 
 /* Scrollbar (subtle) */
@@ -154,4 +242,23 @@
 /* Toast tweaks */
 [data-hot-toast] {
   font-family: "Inter", system-ui, sans-serif !important;
+}
+
+/* Respect the OS "reduce motion" setting: no shimmer, no slide/zoom. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .skeleton { animation: none; background-image: none; }
+}
+
+/* Visually-hidden text must never widen the page. Inside a horizontally
+   scrolling strip an absolutely positioned child escapes the overflow clip and
+   stretches the document (the students page got a 2981px scrollWidth from the
+   group chips). `fixed` takes it out of scrollable overflow entirely. */
+.sr-only:where(:not([class*="not-sr-only"])) {
+  position: fixed;
 }

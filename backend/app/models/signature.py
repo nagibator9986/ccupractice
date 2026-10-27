@@ -29,6 +29,11 @@ class Signature(db.Model):
     signed_payload_sha256 = db.Column(db.String(80), nullable=False)
     # How strongly the server verified this signature: full | document_bound | accepted
     verification_level = db.Column(db.String(20), default="full")
+    # What exactly was signed and through which app. NCALayer signs the DOCX bytes;
+    # eGov mobile shows (and therefore signs) the PDF of the contract. The public
+    # verification page compares each signature with the CURRENT file of ITS format.
+    payload_format = db.Column(db.String(10), nullable=False, default="docx", server_default="docx")
+    channel = db.Column(db.String(20), nullable=False, default="ncalayer", server_default="ncalayer")
 
     created_at = db.Column(db.DateTime, default=utc_now)
 
@@ -42,5 +47,7 @@ class Signature(db.Model):
             "signer_serial": self.signer_serial,
             "signed_payload_sha256": self.signed_payload_sha256,
             "verification_level": self.verification_level or "full",
+            "payload_format": self.payload_format or "docx",
+            "channel": self.channel or "ncalayer",
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

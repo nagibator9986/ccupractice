@@ -136,6 +136,10 @@ def create_app() -> Flask:
         NCANODE_STRICT=os.getenv("NCANODE_STRICT", "0"),
         NCANODE_VERIFY_OCSP=os.getenv("NCANODE_VERIFY_OCSP", "1"),
         NCANODE_VERIFY_CRL=os.getenv("NCANODE_VERIFY_CRL", "0"),
+        # Signing through the eGov mobile app (QR / deep link). Keep OFF until the
+        # public domain is registered with eGov (docs/EGOV_MOBILE_SETUP.md).
+        EGOV_SIGN_ENABLED=os.getenv("EGOV_SIGN_ENABLED", "0"),
+        EGOV_SESSION_TTL_MIN=os.getenv("EGOV_SESSION_TTL_MIN", "10"),
     )
 
     Path(app.config["UPLOAD_FOLDER"]).mkdir(parents=True, exist_ok=True)
@@ -206,6 +210,7 @@ def create_app() -> Flask:
     from .api.auth import bp as auth_bp
     from .api.partners import bp as partners_bp
     from .api.students import bp as students_bp
+    from .api.student_bulk import bp as student_bulk_bp
     from .api.contracts import bp as contracts_bp
     from .api.archive import bp as archive_bp
     from .api.settings import bp as settings_bp
@@ -215,10 +220,12 @@ def create_app() -> Flask:
     from .api.specialties import bp as specialties_bp
     from .api.lms_contracts import bp as lms_contracts_bp
     from .api.verify import bp as verify_bp
+    from .api.egov_sign import bp as egov_sign_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(partners_bp, url_prefix="/api/partners")
     app.register_blueprint(students_bp, url_prefix="/api/students")
+    app.register_blueprint(student_bulk_bp, url_prefix="/api/students")
     app.register_blueprint(contracts_bp, url_prefix="/api/contracts")
     app.register_blueprint(archive_bp, url_prefix="/api/archive")
     app.register_blueprint(settings_bp, url_prefix="/api/settings")
@@ -228,6 +235,7 @@ def create_app() -> Flask:
     app.register_blueprint(specialties_bp, url_prefix="/api/specialties")
     app.register_blueprint(lms_contracts_bp, url_prefix="/api/lms-contracts")
     app.register_blueprint(verify_bp, url_prefix="/api/verify")
+    app.register_blueprint(egov_sign_bp, url_prefix="/api")
 
     @app.get("/api/health")
     def health():

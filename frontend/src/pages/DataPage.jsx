@@ -1,9 +1,14 @@
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
+import { BookOpen, Plus } from "lucide-react";
 import PageHeader from "../components/PageHeader.jsx";
 import Modal from "../components/Modal.jsx";
-import { TextField } from "../components/Field.jsx";
-import { specialtiesApi } from "../api/endpoints.js";
+import SearchInput from "../components/SearchInput.jsx";
+import EmptyState from "../components/EmptyState.jsx";
+import { TableSkeleton } from "../components/Skeleton.jsx";
+import { CheckboxField, TextField } from "../components/Field.jsx";
+import { useConfirm } from "../components/ConfirmDialog.jsx";
+import { errorText, specialtiesApi } from "../api/endpoints.js";
 import { useAuth } from "../context/AuthContext.jsx";
 
 const emptyDraft = () => ({
@@ -16,6 +21,7 @@ const emptyDraft = () => ({
 
 export default function DataPage() {
   const { isAdmin } = useAuth();
+  const confirm = useConfirm();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
@@ -30,7 +36,7 @@ export default function DataPage() {
     } catch (e) {
       const s = e.response?.status;
       if (s !== 401 && s !== 422)
-        toast.error(e.response?.data?.error || "Не удалось загрузить справочник");
+        toast.error(await errorText(e, "Не удалось загрузить справочник"));
       setItems([]);
     } finally {
       setLoading(false);
@@ -61,20 +67,26 @@ export default function DataPage() {
       setEditing(null);
       load();
     } catch (e) {
-      toast.error(e.response?.data?.error || "Не удалось сохранить");
+      toast.error(await errorText(e, "Не удалось сохранить"));
     } finally {
       setSaving(false);
     }
   }
 
   async function remove(s) {
-    if (!window.confirm(`Удалить «${s.name}» из справочника?`)) return;
+    const ok = await confirm({
+      title: "Удалить специальность?",
+      message: `«${s.name}» будет удалена из справочника.`,
+      confirmText: "Удалить",
+      tone: "danger",
+    });
+    if (!ok) return;
     try {
       await specialtiesApi.remove(s.id);
       toast.success("Удалено");
       load();
     } catch (e) {
-      toast.error(e.response?.data?.error || "Не удалось удалить");
+      toast.error(await errorText(e, "Не удалось удалить"));
     }
   }
 
@@ -85,51 +97,44 @@ export default function DataPage() {
         description="Справочники для подстановки в договоры. Специальности, их коды и квалификации можно выбирать списком при оформлении договора со студентом."
         actions={
           isAdmin && (
-            <button onClick={() => setEditing(emptyDraft())} className="btn-primary">
-              + Добавить специальность
+            <button type="button" onClick={() => setEditing(emptyDraft())} className="btn-primary">
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              Добавить специальность
             </button>
           )
         }
       />
 
-      <div className="card p-4 mb-4">
-        <input
-          className="input"
-          placeholder="Поиск: специальность, код, квалификация…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
+      <div className="card p-3 sm:p-4 mb-4">
+        <SearchInput value={q} onChange={setQ} placeholder="Поиск: специальность, код, квалификация…" />
       </div>
 
       <div className="card overflow-x-auto">
         <div className="px-5 pt-4 pb-2 text-[11px] uppercase tracking-wide font-semibold text-charcoal-400">
           Специальности
         </div>
-        <table className="table-default">
+        <table className={`table-default ${!loading && items.length === 0 ? "hidden" : ""}`}>
           <thead>
             <tr>
               <th>Специальность</th>
               <th>Код</th>
               <th>Квалификация</th>
               <th>Статус</th>
-              {isAdmin && <th></th>}
+              {isAdmin && (
+                <th>
+                  <span className="sr-only">Действия</span>
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={isAdmin ? 5 : 4} className="text-center py-6 text-slate-500">Загрузка…</td></tr>
-            ) : items.length === 0 ? (
-              <tr>
-                <td colSpan={isAdmin ? 5 : 4} className="text-center py-8 text-slate-500">
-                  Справочник пуст.
-                  {isAdmin && " Нажмите «+ Добавить специальность», чтобы заполнить список."}
-                </td>
-              </tr>
+              <TableSkeleton rows={5} cols={isAdmin ? 5 : 4} />
             ) : (
               items.map((s) => (
                 <tr key={s.id}>
-                  <td className="font-medium">{s.name}</td>
-                  <td className="text-sm">{s.code || "—"}</td>
+                  <td className="font-medium min-w-[14rem]">{s.name}</td>
+                  <td className="text-sm whitespace-nowrap">{s.code || "—"}</td>
                   <td className="text-sm">{s.qualification || "—"}</td>
                   <td>
                     <span className={`badge ${s.is_active ? "bg-emerald-100 text-emerald-700" : "bg-charcoal-100 text-charcoal-500"}`}>
@@ -139,10 +144,10 @@ export default function DataPage() {
                   {isAdmin && (
                     <td>
                       <div className="flex gap-2 justify-end">
-                        <button className="btn-secondary text-xs" onClick={() => setEditing({ ...s, is_active: s.is_active ? "1" : "0" })}>
+                        <button type="button" className="btn-secondary btn-sm" onClick={() => setEditing({ ...s, is_active: s.is_active ? "1" : "0" })}>
                           Изменить
                         </button>
-                        <button className="btn-ghost text-xs text-red-600" onClick={() => remove(s)}>
+                        <button type="button" className="btn-ghost btn-sm text-red-600" onClick={() => remove(s)}>
                           Удалить
                         </button>
                       </div>
@@ -153,6 +158,31 @@ export default function DataPage() {
             )}
           </tbody>
         </table>
+        {!loading && items.length === 0 && (
+          <EmptyState
+            icon={BookOpen}
+            title={q.trim() ? "Ничего не найдено" : "Справочник пуст"}
+            description={
+              q.trim()
+                ? "Попробуйте изменить поисковый запрос."
+                : isAdmin
+                  ? "Добавьте специальности — их можно будет выбирать списком при оформлении договора."
+                  : "Специальности ещё не добавлены."
+            }
+            action={
+              q.trim() ? (
+                <button type="button" className="btn-secondary" onClick={() => setQ("")}>
+                  Очистить поиск
+                </button>
+              ) : isAdmin ? (
+                <button type="button" className="btn-primary" onClick={() => setEditing(emptyDraft())}>
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  Добавить специальность
+                </button>
+              ) : null
+            }
+          />
+        )}
       </div>
 
       <Modal
@@ -162,15 +192,17 @@ export default function DataPage() {
         size="md"
         footer={
           <>
-            <button className="btn-secondary" onClick={() => setEditing(null)}>Отмена</button>
-            <button className="btn-primary" onClick={save} disabled={saving}>Сохранить</button>
+            <button type="button" className="btn-secondary" onClick={() => setEditing(null)}>Отмена</button>
+            <button type="button" className="btn-primary" onClick={save} disabled={saving}>Сохранить</button>
           </>
         }
       >
         {editing && (
           <div className="space-y-4">
             <TextField
-              label="Специальность *"
+              label="Специальность"
+              required
+              data-autofocus
               value={editing.name}
               onChange={(v) => setEditing({ ...editing, name: v })}
               hint="Например: Вычислительная техника и программное обеспечение"
@@ -187,18 +219,12 @@ export default function DataPage() {
               onChange={(v) => setEditing({ ...editing, qualification: v })}
               hint="Например: Техник-программист"
             />
-            <div>
-              <label className="label">Статус</label>
-              <label className="flex items-center gap-2 mt-1 text-sm text-charcoal-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded border-charcoal-300 text-coral-600 focus:ring-coral-500"
-                  checked={editing.is_active === "1"}
-                  onChange={(e) => setEditing({ ...editing, is_active: e.target.checked ? "1" : "0" })}
-                />
-                Активна (видна в списке выбора при оформлении договора)
-              </label>
-            </div>
+            <CheckboxField
+              label="Статус"
+              text="Активна (видна в списке выбора при оформлении договора)"
+              checked={editing.is_active === "1"}
+              onChange={(v) => setEditing({ ...editing, is_active: v ? "1" : "0" })}
+            />
           </div>
         )}
       </Modal>

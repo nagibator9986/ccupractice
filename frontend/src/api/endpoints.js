@@ -3,6 +3,49 @@ import client from "./client";
 // Mirror of client.js — used for raw <a href> download URLs.
 const API_PREFIX = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "") + "/api";
 
+/**
+ * Human-readable message from an axios error. Blob responses (xlsx/pdf
+ * downloads) carry their JSON error inside a Blob, so reading `data.error`
+ * directly gives `undefined` — this unwraps it.
+ */
+export async function errorText(e, fallback = "Произошла ошибка") {
+  let data = e?.response?.data;
+  if (data instanceof Blob) {
+    try {
+      data = JSON.parse(await data.text());
+    } catch {
+      data = null;
+    }
+  }
+  return data?.error || (e?.code === "ECONNABORTED" ? "Сервер отвечает слишком долго" : null) || fallback;
+}
+
+/** `Content-Disposition: attachment; filename*=UTF-8''...` → decoded name. */
+function filenameFrom(res, fallback) {
+  const cd = res.headers?.["content-disposition"] || "";
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1]);
+    } catch {
+      /* fall through */
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(cd);
+  return plain ? plain[1] : fallback;
+}
+
+function saveBlob(res, fallbackName) {
+  const url = URL.createObjectURL(res.data);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filenameFrom(res, fallbackName);
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
 export const authApi = {
   login: (email, password) => client.post("/auth/login", { email, password }).then((r) => r.data),
   me: () => client.get("/auth/me").then((r) => r.data),
@@ -28,6 +71,47 @@ export const studentsApi = {
   // Students page toggle and by the LmsContracts create-modal pre-flight.
   setGrant: (sid, isGrant) =>
     client.put(`/students/${sid}/grant`, { is_grant_student: !!isGrant }).then((r) => r.data),
+
+  // ── Group-oriented operations (see backend api/student_bulk.py) ──────────
+  // Per-group overview: students, partner/period coverage, contract pipeline.
+  groups: () => client.get("/students/groups").then((r) => r.data),
+  // Blank .xlsx template (dropdowns are filled from partners/specialties/groups).
+  downloadImportTemplate: async () => {
+    const res = await client.get("/students/import/template", { responseType: "blob" });
+    saveBlob(res, "Шаблон_загрузки_студентов.xlsx");
+  },
+  // Import is stateless: the SAME file + options go to preview and to commit.
+  //   options = { mode: "skip"|"fill"|"overwrite", default_group, force_group,
+  //               group_overrides: {sheetName: group}, defaults: {partner_id,
+  //               practice_start, practice_end, college_supervisor,
+  //               partner_supervisor, practice_type, course, specialty, ...} }
+  importPreview: (file, options = {}) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("options", JSON.stringify(options));
+    return client.post("/students/import/preview", form, { timeout: 120_000 }).then((r) => r.data);
+  },
+  // expect = { new, update } from the preview the operator confirmed; the
+  // server answers 409 code="plan_changed" if the register moved meanwhile.
+  importCommit: (file, options = {}, expect = {}) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("options", JSON.stringify(options));
+    if (expect.new != null) form.append("expect_new", String(expect.new));
+    if (expect.update != null) form.append("expect_update", String(expect.update));
+    return client.post("/students/import/commit", form, { timeout: 120_000 }).then((r) => r.data);
+  },
+  // Same columns as the import template — an exported group can be edited and re-imported.
+  exportXlsx: async (params) => {
+    const res = await client.get("/students/export", { params, responseType: "blob" });
+    saveBlob(res, "Студенты.xlsx");
+  },
+  // { student_ids | group, fields: {partner_id, practice_start, practice_end,
+  //   college_supervisor, partner_supervisor, practice_type}, only_empty }
+  bulkPractice: (body) => client.post("/students/bulk-practice", body).then((r) => r.data),
+  // Deletes students WITHOUT contracts; returns { deleted, blocked: [{id, full_name, reason}] }.
+  bulkDelete: (student_ids) =>
+    client.post("/students/bulk-delete", { student_ids }).then((r) => r.data),
 };
 
 export const contractsApi = {
@@ -35,9 +119,33 @@ export const contractsApi = {
   get: (id) => client.get(`/contracts/${id}`).then((r) => r.data),
   create: (data) => client.post("/contracts", data).then((r) => r.data),
   update: (id, data) => client.put(`/contracts/${id}`, data).then((r) => r.data),
-  remove: (id) => client.delete(`/contracts/${id}`).then((r) => r.data),
+  // Signed / scanned contracts need `force` (backend answers 409 has_signatures).
+  remove: (id, force = false) =>
+    client.delete(`/contracts/${id}`, { data: { force: !!force } }).then((r) => r.data),
+  // payload: { force } resets signatures; { allow_incomplete } overrides the
+  // readiness gate (backend answers 422 code="incomplete" with `readiness`).
   generate: (id, payload) =>
-    client.post(`/contracts/${id}/generate`, payload || {}).then((r) => r.data),
+    client.post(`/contracts/${id}/generate`, payload || {}, { timeout: 180_000 }).then((r) => r.data),
+  // Pre-flight for the create dialog: { readiness, duplicate, student_contracts }.
+  readiness: (params) => client.get("/contracts/readiness", { params }).then((r) => r.data),
+  // body: { student_ids | group, partner_id?, contract_date, existing: "skip"|"allow",
+  //         skip_incomplete, dry_run } → { created, will_create, skipped, contract_ids, items, warnings }
+  bulk: (body) => client.post("/contracts/bulk", body).then((r) => r.data),
+  // Dashboard numbers: totals, by_status, by_next_action, attention, groups, recent.
+  stats: () => client.get("/contracts/stats").then((r) => r.data),
+  exportXlsx: async (params) => {
+    const res = await client.get("/contracts/export", { params, responseType: "blob" });
+    saveBlob(res, "Договоры_практики.xlsx");
+  },
+  // Authenticated inline preview: returns an object URL for <iframe src>.
+  // The CALLER must URL.revokeObjectURL() it when done.
+  previewUrl: async (id, fmt = "pdf") => {
+    const res = await client.get(`/contracts/${id}/download/${fmt}`, {
+      params: { inline: 1 },
+      responseType: "blob",
+    });
+    return URL.createObjectURL(res.data);
+  },
   uploadScan: (id, file) => {
     const form = new FormData();
     form.append("file", file);
@@ -101,6 +209,29 @@ export const signingApi = {
     client.post(`/signing/requests/${requestId}/revoke`).then((r) => r.data),
   resend: (requestId) =>
     client.post(`/signing/requests/${requestId}/resend`).then((r) => r.data),
+  // Keeps the token (the URL already sent stays valid), only moves the expiry.
+  extend: (requestId, days = 30) =>
+    client.post(`/signing/requests/${requestId}/extend`, { days }).then((r) => r.data),
+  // → { new_links, items: [{contract_id, number, student_name, group_name,
+  //      status: "ok"|"skipped", reason, links: [{id, signer_role, recipient_name,
+  //      recipient_phone, sign_url, token, expires_at, is_new, ...}]}] }
+  bulkInvite: (contract_ids, roles = ["partner", "student"]) =>
+    client.post("/signing/bulk-invite", { contract_ids, roles }, { timeout: 120_000 }).then((r) => r.data),
+  // .xlsx with every live link + a ready-to-paste message per row.
+  exportLinks: async (contract_ids, roles) => {
+    const res = await client.post(
+      "/signing/links-export",
+      { contract_ids, ...(roles ? { roles } : {}) },
+      { responseType: "blob" },
+    );
+    saveBlob(res, "Ссылки_на_подписание.xlsx");
+  },
+  publicPreviewUrl: (token) => `${API_PREFIX}/signing/public/${token}/download/pdf?inline=1`,
+  // eGov mobile (QR / deep link). Start returns { session:{id,status,expires_at}, qr_png (data URI),
+  // qr_content, deep_links:{ios,android}, https, ttl_minutes }; status polls { session:{status,error}, request_status }.
+  egovStart: (token) => client.post(`/signing/public/${token}/egov/session`).then((r) => r.data),
+  egovStatus: (token, sessionId) =>
+    client.get(`/signing/public/${token}/egov/session/${sessionId}`).then((r) => r.data),
   publicView: (token) =>
     client.get(`/signing/public/${token}`).then((r) => r.data),
   publicMarkViewed: (token) =>

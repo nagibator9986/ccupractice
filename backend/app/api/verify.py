@@ -59,6 +59,8 @@ def _signature_dto(sig) -> dict:
         "signer_serial_tail": _serial_tail(sig.signer_serial),
         "signed_payload_sha256": sig.signed_payload_sha256,
         "verification_level": getattr(sig, "verification_level", "full"),
+        "payload_format": getattr(sig, "payload_format", None) or "docx",
+        "channel": getattr(sig, "channel", None) or "ncalayer",
         "created_at": sig.created_at.isoformat() if sig.created_at else None,
     }
 
@@ -77,6 +79,15 @@ def _current_file_hash(contract: Contract) -> str | None:
     if not contract.docx_path:
         return None
     p = Path(current_app.config["ARCHIVE_FOLDER"]) / contract.docx_path
+    if not p.is_file():
+        return None
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def _current_pdf_hash(contract: Contract) -> str | None:
+    if not contract.pdf_path:
+        return None
+    p = Path(current_app.config["ARCHIVE_FOLDER"]) / contract.pdf_path
     if not p.is_file():
         return None
     return hashlib.sha256(p.read_bytes()).hexdigest()
@@ -342,17 +353,33 @@ def public_verify(code: str):
     required_roles = {"college", "partner", "student"}
     fully_signed = required_roles.issubset(signed_roles)
 
-    current_hash = _current_file_hash(contract)
-    # If at least one signature exists, the canonical hash is what was signed
-    # (every signer signs the same DOCX bytes, so all `signed_payload_sha256`
-    # values agree). We expose that single value plus a mismatch flag for the
-    # currently-archived file so a tampered re-archive is visible to anyone.
+    # Every signature is checked against the CURRENT archived file of the format
+    # it was made over: NCALayer signs the DOCX, eGov mobile the PDF (what the
+    # phone shows). A re-archived / tampered file therefore shows up per format.
+    current_hashes = {
+        "docx": _current_file_hash(contract),
+        "pdf": _current_pdf_hash(contract),
+    }
+    by_format: dict[str, list] = {}
+    for s_ in sigs:
+        by_format.setdefault(getattr(s_, "payload_format", None) or "docx", []).append(s_)
+    checks = []
+    for fmt, group in by_format.items():
+        signed = {g.signed_payload_sha256 for g in group}
+        cur = current_hashes.get(fmt)
+        checks.append({
+            "format": fmt,
+            "signed_payload_sha256": group[0].signed_payload_sha256,
+            "current_file_sha256": cur,
+            "match": cur is not None and signed == {cur},
+            "available": cur is not None,
+        })
     signed_hash = sigs[0].signed_payload_sha256 if sigs else None
-    integrity_ok = (
-        signed_hash is not None
-        and current_hash is not None
-        and signed_hash == current_hash
+    current_hash = current_hashes.get(
+        (getattr(sigs[0], "payload_format", None) or "docx") if sigs else "docx"
     )
+    integrity_ok = bool(checks) and all(c["match"] for c in checks)
+    integrity_available = bool(checks) and all(c["available"] for c in checks)
 
     return jsonify(
         kind="practicum",
@@ -396,7 +423,8 @@ def public_verify(code: str):
             "signed_payload_sha256": signed_hash,
             "current_file_sha256": current_hash,
             "match": integrity_ok,
-            "available": signed_hash is not None and current_hash is not None,
+            "available": integrity_available,
+            "by_format": checks,
         },
         download={
             "docx": f"/api/verify/{code}/file/docx" if contract.docx_path else None,

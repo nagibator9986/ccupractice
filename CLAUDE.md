@@ -91,6 +91,44 @@ tokenized link per party; public URL `/enroll-sign/<token>`).
 
 ---
 
+## 3a. Practice contracts — group workflows
+
+The practice process (`Contract`, `/api/contracts`, `/api/signing`) is worked **by group**:
+upload a group list → assign partner + period → create contracts for the whole
+group → generate → send signing links → collect ЭЦП.
+
+- **Excel/CSV import** (`services/student_import.py`, routes in `api/student_bulk.py`) is
+  *stateless*: `POST /api/students/import/preview` and `/commit` both receive the same
+  file + `options`; `build_plan()` is the ONLY place that decides what happens to a row,
+  and commit rebuilds that plan (optionally guarded by `expect_new/expect_update` → 409
+  `plan_changed`). Group of a row = «Группа» cell → group in a title row above the table →
+  sheet name (non-generic) → `default_group`; `force_group` overrides all. Existing
+  students are matched by ИИН (authoritative), then ФИО(+group); modes `skip | fill
+  (default, only empty fields) | overwrite`. Rules: partners are never auto-created from a
+  spreadsheet; `is_grant_student` is only ever raised (clearing is guarded by the LMS
+  invariants in §6); birth date derived from ИИН is fill-only; a rejected row never
+  "claims" its ИИН. ИИН helpers live in `utils/iin.py` (shared with
+  `import_grant_students.py`). `GET /import/template` and `/export` share one column
+  layout so an exported group can be edited and re-imported.
+- **Readiness** (`services/readiness.py`): `critical` gaps (student ИИН/dates, partner
+  БИН/director/address, college director) make `POST /contracts/<id>/generate` answer
+  422 `incomplete` unless `allow_incomplete`; bulk creation skips such students and says why.
+- **Guards**: duplicate (student+partner+year) → 409 `duplicate_contract`; deleting or
+  re-dating a contract that has signatures/scan → 409 `has_signatures` unless `force`.
+- **`Contract.next_action`** (`generate → invite → await_signatures → complete → done`) is
+  the single definition used by list, card and dashboard — don't re-derive it in the UI.
+- **Bulk**: `POST /contracts/bulk` (dry_run supported; DB only — PDFs are generated one by
+  one by the SPA with a progress bar because LibreOffice takes seconds per file),
+  `POST /signing/bulk-invite` (idempotent: never a second live token per role),
+  `POST /signing/links-export` (xlsx of live links + ready-to-paste messages),
+  `POST /students/bulk-practice`, `POST /students/bulk-delete` (skips students with contracts).
+- Public signing surface masks identifiers (`bin_masked`, `iin_masked`) and serves the PDF
+  inline (`?inline=1`) with the signature annex once anyone has signed.
+- **Tests**: `cd backend && .venv/bin/python -m unittest discover -s tests` (stdlib only,
+  temp SQLite DB; the PDF assertions need LibreOffice and are skipped without it).
+
+---
+
 ## 4. Document generation — the critical subsystem
 
 **Principle: render real documents, never hand-rebuild them.**
@@ -161,9 +199,19 @@ builder and regenerate, or the change is lost on the next rebuild.
   `document_bound` | `accepted`) shown to the admin via `VerificationBadge`, so
   the real assurance per signature is auditable. `legal` = NCANode-verified.
   Without `NCANODE_URL`: RSA/ECDSA = `full`, GOST = `document_bound`/`accepted`.
+- **eGov mobile channel** (`api/egov_sign.py`, `services/egov_sign.py`, off unless
+  `EGOV_SIGN_ENABLED=1`; setup in `docs/EGOV_MOBILE_SETUP.md`). Follows the official QR /
+  cross-signing spec (API №1 GET, API №2 GET+PUT, `mobileSign:` QR, `mgovsign.page.link`).
+  It signs the **PDF** (eGov mobile only displays PDF), method `CMS_WITH_DATA`; the CMS must
+  embed exactly our PDF bytes (content binding that also works for GOST) and then goes through
+  the same `verify_cms_signature` + `record_public_signature` as NCALayer. `Signature` carries
+  `channel` + `payload_format` and the verify page checks each signature against the current
+  file OF ITS FORMAT — never assume "all signers signed the same DOCX" any more. The session
+  stores the browser's public origin (the phone sends no `X-Public-Origin`) and pins the PDF
+  SHA-256. Times sent to the browser must carry a `Z` (naive UTC is read as local time).
 - Out of scope (documented MVP limit): cert-chain to НУЦ root, CRL/OCSP, TSA
   timestamps; server-side asymmetric verification of GOST signatures.
-- Public token flow: GET preview is read-only; `pending→viewed` is an explicit
+- Public token flow (NCALayer): GET preview is read-only; `pending→viewed` is an explicit
   POST; the signer can preview the full **bilingual PDF inline** (`?inline=1`)
   before signing; one signature per (enrollment, document, party) enforced by a
   UNIQUE constraint; status flips to SIGNED when the whole matrix is satisfied

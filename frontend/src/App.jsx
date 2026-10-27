@@ -4,6 +4,7 @@ import Layout from "./components/Layout.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import PartnersPage from "./pages/PartnersPage.jsx";
 import StudentsPage from "./pages/StudentsPage.jsx";
+import GroupsPage from "./pages/GroupsPage.jsx";
 import ContractsPage from "./pages/ContractsPage.jsx";
 import ContractDetailPage from "./pages/ContractDetailPage.jsx";
 import EnrollmentsPage from "./pages/EnrollmentsPage.jsx";
@@ -50,6 +51,7 @@ export default function App() {
       >
         <Route index element={<DashboardPage />} />
         <Route path="partners" element={<PartnersPage />} />
+        <Route path="groups" element={<GroupsPage />} />
         <Route path="students" element={<StudentsPage />} />
         <Route path="contracts" element={<ContractsPage />} />
         <Route path="contracts/:id" element={<ContractDetailPage />} />

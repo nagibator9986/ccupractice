@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
+import { CircleCheck, ClipboardList, Download, Hourglass, Circle, ShieldCheck, PenLine, Check, TriangleAlert } from "lucide-react";
 import BrandLogo from "../components/BrandLogo.jsx";
+import SectionCard from "../components/SectionCard.jsx";
+import SignChannelBadge from "../components/SignChannelBadge.jsx";
+import { Skeleton } from "../components/Skeleton.jsx";
 import { verifyApi } from "../api/endpoints.js";
 import { formatDate, formatDateTime } from "../utils/format.js";
 
@@ -45,7 +49,16 @@ export default function VerifyPage() {
     return () => { cancelled = true; };
   }, [code]);
 
-  if (loading) return <Wrapper><p className="text-charcoal-500 text-center">Загрузка…</p></Wrapper>;
+  if (loading)
+    return (
+      <Wrapper>
+        <div className="card p-6 space-y-3" aria-busy="true" aria-label="Загрузка">
+          <Skeleton className="h-6 w-2/3" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-1/2" />
+        </div>
+      </Wrapper>
+    );
   if (error)   return <Wrapper><ErrorState message={error} code={code} /></Wrapper>;
   if (!data)   return null;
 
@@ -89,8 +102,7 @@ export default function VerifyPage() {
     <Wrapper>
       <Header banner={banner} />
 
-      <section className="card p-6 mb-5">
-        <h2 className="section-title mb-4">📋 О документе</h2>
+      <SectionCard className="mb-5" icon={ClipboardList} title="О документе">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
           <Info label="Номер договора" value={contract.number} strong />
           <Info label="Дата договора" value={formatDate(contract.contract_date)} />
@@ -111,13 +123,22 @@ export default function VerifyPage() {
         <div className="divider my-5" />
         <h3 className="font-semibold mb-2 text-charcoal-700">Скачать оригинал</h3>
         <div className="flex flex-wrap gap-2">
-          {download.pdf && <a className="btn-secondary" href={download.pdf}>📕 PDF</a>}
-          {download.docx && <a className="btn-secondary" href={download.docx}>📄 DOCX</a>}
+          {download.pdf && (
+            <a className="btn-secondary" href={download.pdf}>
+              <Download className="h-4 w-4" aria-hidden="true" />
+              PDF
+            </a>
+          )}
+          {download.docx && (
+            <a className="btn-secondary" href={download.docx}>
+              <Download className="h-4 w-4" aria-hidden="true" />
+              DOCX
+            </a>
+          )}
         </div>
-      </section>
+      </SectionCard>
 
-      <section className="card p-6 mb-5">
-        <h2 className="section-title mb-4">🖋️ Список подписей</h2>
+      <SectionCard className="mb-5" icon={PenLine} title="Список подписей">
         <ul className="space-y-3">
           {(summary.required_roles || summary.required_parties || []).map((role, idx) => {
             const sig = signatures.find((s) => s.signer_role === role || s.signer_party === role);
@@ -149,6 +170,11 @@ export default function VerifyPage() {
                     <div><span className="text-charcoal-400">ИИН / БИН: </span>{sig.signer_iin_or_bin_masked || "—"}</div>
                     <div><span className="text-charcoal-400">Серийный № сертификата: </span><span className="font-mono">…{sig.signer_serial_tail || "—"}</span></div>
                     <div><span className="text-charcoal-400">Время подписания: </span>{formatDateTime(sig.created_at)}</div>
+                    {sig.channel && (
+                      <div className="md:col-span-2">
+                        <SignChannelBadge channel={sig.channel} payloadFormat={sig.payload_format} />
+                      </div>
+                    )}
                     {sig.signed_payload_sha256 && (
                       <div className="md:col-span-2 break-all font-mono text-[11px] text-charcoal-500">
                         SHA-256: {sig.signed_payload_sha256}
@@ -162,10 +188,9 @@ export default function VerifyPage() {
             );
           })}
         </ul>
-      </section>
+      </SectionCard>
 
-      <section className="card p-6 mb-5">
-        <h2 className="section-title mb-4">🔒 Целостность документа</h2>
+      <SectionCard className="mb-5" icon={ShieldCheck} title="Целостность документа">
         {integrityKnown ? (
           <div className="space-y-2 text-sm">
             <div className="font-mono text-xs break-all bg-charcoal-50 rounded-xl px-3 py-2">
@@ -176,10 +201,15 @@ export default function VerifyPage() {
               <span className="text-charcoal-400">SHA-256 архивного файла:</span><br />
               {integrity.current_file_sha256}
             </div>
-            <div className={`text-sm font-semibold ${integrityOk ? "text-emerald-700" : "text-amber-700"}`}>
+            <div className={`flex items-start gap-1.5 text-sm font-semibold ${integrityOk ? "text-emerald-700" : "text-amber-700"}`}>
+              {integrityOk ? (
+                <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              ) : (
+                <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              )}
               {integrityOk
-                ? "✓ Хэши совпадают — документ не был изменён после подписания."
-                : "⚠ Хэши не совпадают — архивный файл отличается от подписанного."}
+                ? "Хэши совпадают — документ не был изменён после подписания."
+                : "Хэши не совпадают — архивный файл отличается от подписанного."}
             </div>
           </div>
         ) : (
@@ -187,7 +217,7 @@ export default function VerifyPage() {
             Хэш будет показан после того, как хотя бы одна сторона подпишет документ.
           </p>
         )}
-      </section>
+      </SectionCard>
 
       <footer className="text-center text-xs text-charcoal-400 mt-10 flex flex-col items-center gap-2 pb-10">
         <img src="/ccu-logo.png" alt="" className="h-10 w-10 opacity-60" />
@@ -216,15 +246,15 @@ function Header({ banner }) {
     partial: "bg-gradient-to-br from-coral-500 to-coral-700 text-white",
     pending: "bg-gradient-to-br from-charcoal-700 to-charcoal-900 text-white",
   };
-  const icon = { ok: "✓", warn: "⚠", partial: "⏳", pending: "○" }[banner.tone];
+  const Icon = { ok: CircleCheck, warn: TriangleAlert, partial: Hourglass, pending: Circle }[banner.tone];
   return (
-    <header className={`rounded-3xl shadow-soft p-7 md:p-8 mb-6 ${tones[banner.tone]}`}>
+    <header className={`rounded-3xl shadow-soft p-5 sm:p-7 md:p-8 mb-6 ${tones[banner.tone]}`}>
       <div className="flex items-center gap-3 mb-5">
         <BrandLogo size={48} withWordmark variant="light" />
       </div>
       <div className="flex items-start gap-4">
-        <div className="h-14 w-14 rounded-2xl bg-white/15 grid place-items-center text-3xl backdrop-blur shrink-0">
-          {icon}
+        <div className="h-14 w-14 rounded-2xl bg-white/15 grid place-items-center backdrop-blur shrink-0" aria-hidden="true">
+          <Icon className="h-8 w-8" />
         </div>
         <div>
           <h1 className="font-serif text-2xl md:text-3xl font-bold leading-tight">
@@ -253,8 +283,10 @@ function Info({ label, value, strong = false, mono = false, hint }) {
 
 function ErrorState({ message, code }) {
   return (
-    <div className="card p-10 text-center">
-      <div className="text-5xl mb-3">⚠️</div>
+    <div className="card p-6 sm:p-10 text-center">
+      <span className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-amber-50 text-amber-600" aria-hidden="true">
+        <TriangleAlert className="h-7 w-7" />
+      </span>
       <h1 className="font-serif text-2xl font-bold mb-2">Документ не найден</h1>
       <p className="text-charcoal-500">{message}</p>
       <p className="text-xs text-charcoal-400 mt-4 font-mono">code: {code}</p>

@@ -5,6 +5,7 @@ from .contract import Contract, ContractStatus
 from .settings import CollegeSettings, ContractCounter
 from .signature import Signature
 from .signing_request import SigningRequest
+from .egov_session import EgovSignSession
 from .specialty import Specialty
 from .enrollment import (
     EnrollmentContract,
@@ -43,6 +44,7 @@ __all__ = [
     "ContractCounter",
     "Signature",
     "SigningRequest",
+    "EgovSignSession",
     "Specialty",
     "EnrollmentContract",
     "EnrollmentStatus",

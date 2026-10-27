@@ -33,6 +33,9 @@ class ContractStatus:
     }
 
 
+SIGNER_ROLES = ("college", "partner", "student")
+
+
 class Contract(db.Model):
     __tablename__ = "contracts"
 
@@ -68,6 +71,38 @@ class Contract(db.Model):
         "Signature", backref="contract", lazy=True, cascade="all, delete-orphan"
     )
 
+    @property
+    def signed_roles(self) -> list[str]:
+        have = {s.signer_role for s in (self.signatures or [])}
+        return [r for r in SIGNER_ROLES if r in have]
+
+    @property
+    def invited_roles(self) -> list[str]:
+        """Roles that currently hold a live (pending / viewed) signing link."""
+        live = {
+            r.signer_role for r in (self.signing_requests or [])
+            if r.status in ("pending", "viewed") and not r.is_expired
+        }
+        return [r for r in SIGNER_ROLES if r in live]
+
+    @property
+    def next_action(self) -> str:
+        """The single thing the workflow is waiting for — one definition shared
+        by the list, the card and the dashboard so they can never disagree.
+
+        generate → invite → await_signatures → complete → done
+        """
+        if self.status == ContractStatus.COMPLETED:
+            return "done"
+        if not self.docx_path:
+            return "generate"
+        signed = set(self.signed_roles)
+        if len(signed) == len(SIGNER_ROLES):
+            return "complete"
+        if not signed and not self.invited_roles:
+            return "invite"
+        return "await_signatures"
+
     def to_dict(self, include_relations: bool = False) -> dict:
         data = {
             "id": self.id,
@@ -95,6 +130,9 @@ class Contract(db.Model):
             "notes": self.notes,
             "signatures_count": len(self.signatures or []),
             "signing_requests_count": len(self.signing_requests or []),
+            "signed_roles": self.signed_roles,
+            "invited_roles": self.invited_roles,
+            "next_action": self.next_action,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
