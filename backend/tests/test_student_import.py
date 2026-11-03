@@ -137,6 +137,32 @@ class StudentImportTests(AppTestCase):
         bad = self.upload("/api/students/import/preview", data, {"column_overrides": {"*": {"X": "nonsense"}}})
         self.assertEqual(bad.status_code, 400)
 
+    def test_email_column_is_not_mistaken_for_the_home_address(self):
+        iin = self.make_iin()
+        data = self.xlsx({"ПО 25-1": [["ФИО", "ИИН", "Электронный адрес (Е-mail)", "Адрес постоянной регистрации"],
+                                      ["Иванов Иван", iin, "123@mail.ru", "КАЗАХСТАН, АЛМАТЫ"]]})
+        body = self.upload("/api/students/import/preview", data).get_json()
+        self.assertIn("Электронный адрес (Е-mail)", body["sheets"][0]["ignored_columns"])
+        self.assertEqual(self.upload("/api/students/import/commit", data).status_code, 200)
+        from app.models import Student
+        with self.app.app_context():
+            self.assertEqual(Student.query.one().home_address, "КАЗАХСТАН, АЛМАТЫ")
+
+    def test_placeholder_values_are_not_loaded(self):
+        data = self.xlsx({"ПО 25-1": [["ФИО", "ИИН", "Адрес", "Телефон"], ["Иванов Иван", self.make_iin(), "-", "нет"]]})
+        self.assertEqual(self.upload("/api/students/import/commit", data).status_code, 200)
+        from app.models import Student
+        with self.app.app_context():
+            s = Student.query.one()
+            self.assertEqual((s.home_address, s.phone), (None, None))
+
+    def test_blank_group_cell_falls_back_to_the_sheet_name(self):
+        data = self.xlsx({"ПД 25-2П": [["ФИО", "ИИН", "Код группы"],
+                                       ["Иванов Иван", self.make_iin(), None],
+                                       ["Петров Пётр", self.make_iin("20080101", "5", "0002"), "ПД 25-2П"]]})
+        rows = self.upload("/api/students/import/preview", data).get_json()["rows"]
+        self.assertEqual({r["group_name"] for r in rows}, {"ПД 25-2П"})
+
     # ── commit ─────────────────────────────────────────────────────────────
     def test_commit_creates_and_is_idempotent(self):
         from app.models import Partner, Student

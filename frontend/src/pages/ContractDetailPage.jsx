@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   CircleAlert,
   CircleCheck,
@@ -45,14 +45,20 @@ import SigningParties from "../components/contracts/SigningParties.jsx";
 import ShareLinkModal from "../components/contracts/ShareLinkModal.jsx";
 import BulkLinksModal from "../components/contracts/BulkLinksModal.jsx";
 import DocumentPreviewModal from "../components/contracts/DocumentPreviewModal.jsx";
+import { RejectScanModal, ScanViewModal } from "../components/contracts/ScanReviewModal.jsx";
 import { generateInteractive } from "../components/contracts/bulkOps.js";
 import {
   ALLOWED_STATUS_TRANSITIONS,
+  CAPACITY_REP,
   ROLES,
-  ROLE_TITLE,
+  REP_REASON,
+  capacityOf,
   fmtDate,
   fmtDateTime,
+  hasPendingScan,
+  partyTitle,
   statusMoveLabel,
+  validateScanFiles,
 } from "../components/contracts/contractFlow.js";
 import { contractsApi, errorText, signingApi } from "../api/endpoints.js";
 import { formatDate } from "../utils/format.js";
@@ -96,20 +102,25 @@ function NCABadge({ available }) {
   );
 }
 
-function SignatureCard({ role, sig }) {
+function SignatureCard({ role, sig, capacity }) {
+  const cap = sig?.signer_capacity || capacity;
+  const onPaper = sig?.channel === "scan";
   return (
     <div className={clsx("rounded-xl border p-3", sig ? "border-emerald-200 bg-emerald-50/40" : "border-charcoal-100")}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-sm font-semibold text-charcoal-800">{ROLE_TITLE[role]}</div>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 text-sm font-semibold text-charcoal-800">{partyTitle(role, cap)}</div>
         {sig ? (
-          <span className="badge bg-emerald-100 text-emerald-700">
+          <span className="badge shrink-0 whitespace-nowrap bg-emerald-100 text-emerald-700">
             <CircleCheck className="h-3.5 w-3.5" aria-hidden="true" />
             Подписано
           </span>
         ) : (
-          <span className="badge bg-charcoal-100 text-charcoal-600">Не подписано</span>
+          <span className="badge shrink-0 whitespace-nowrap bg-charcoal-100 text-charcoal-600">Не подписано</span>
         )}
       </div>
+      {role === "student" && cap === CAPACITY_REP && (
+        <p className="mt-1 text-xs text-amber-800">{sig ? "Подписал законный представитель" : "Подписывает законный представитель"} — {REP_REASON}.</p>
+      )}
       {sig && (
         <dl className="mt-2 space-y-1.5 text-xs text-charcoal-600">
           <div className="flex flex-wrap gap-1.5">
@@ -124,18 +135,20 @@ function SignatureCard({ role, sig }) {
             <Fingerprint className="mt-0.5 h-3.5 w-3.5 shrink-0 text-charcoal-400" aria-hidden="true" />
             <span className="min-w-0 break-all">ИИН/БИН: {sig.signer_iin_or_bin || "—"}</span>
           </div>
-          <div className="flex items-start gap-1.5">
-            <KeyRound className="mt-0.5 h-3.5 w-3.5 shrink-0 text-charcoal-400" aria-hidden="true" />
-            <span className="min-w-0 break-all">Серийный номер: {sig.signer_serial || "—"}</span>
-          </div>
+          {!onPaper && (
+            <div className="flex items-start gap-1.5">
+              <KeyRound className="mt-0.5 h-3.5 w-3.5 shrink-0 text-charcoal-400" aria-hidden="true" />
+              <span className="min-w-0 break-all">Серийный номер: {sig.signer_serial || "—"}</span>
+            </div>
+          )}
           <div className="flex items-start gap-1.5">
             <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-charcoal-400" aria-hidden="true" />
-            <span>{fmtDateTime(sig.created_at)}</span>
+            <span>{onPaper ? `Скан принят ${fmtDateTime(sig.created_at)}` : fmtDateTime(sig.created_at)}</span>
           </div>
           <div className="flex items-start gap-1.5">
             <Hash className="mt-0.5 h-3.5 w-3.5 shrink-0 text-charcoal-400" aria-hidden="true" />
             <span className="min-w-0 break-all font-mono text-[10px] text-charcoal-500" title={sig.signed_payload_sha256}>
-              SHA-256: {sig.signed_payload_sha256?.slice(0, 24)}…
+              {onPaper ? "SHA-256 скана" : "SHA-256"}: {sig.signed_payload_sha256?.slice(0, 24)}…
             </span>
           </div>
         </dl>
@@ -186,6 +199,8 @@ export default function ContractDetailPage() {
   // `navigate` changes identity with the location; keep it out of the loader's deps.
   const navRef = useRef(navigate);
   navRef.current = navigate;
+  const [sp, setSp] = useSearchParams();
+  const reviewIntent = sp.get("review") === "1"; // «Проверить скан» in the list opens the scan right away
 
   const [contract, setContract] = useState(null);
   const [requests, setRequests] = useState([]);
@@ -196,6 +211,8 @@ export default function ContractDetailPage() {
   const [share, setShare] = useState(null);
   const [linksResult, setLinksResult] = useState(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [scanView, setScanView] = useState(null); // signing request whose scan is open
+  const [scanReject, setScanReject] = useState(null); // signing request being rejected
   const [scanFile, setScanFile] = useState(null);
   const [notesDraft, setNotesDraft] = useState("");
   const [dateDraft, setDateDraft] = useState("");
@@ -235,6 +252,8 @@ export default function ContractDetailPage() {
     setContract(null);
     setRequests([]);
     setScanFile(null);
+    setScanView(null);
+    setScanReject(null);
     load();
   }, [load]);
 
@@ -244,6 +263,35 @@ export default function ContractDetailPage() {
     setNotesDraft(contract.notes || "");
     setDateDraft(contract.contract_date || "");
   }, [contract?.id, contract?.notes, contract?.contract_date]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep the open scan dialogs in step with the reloaded requests.
+  useEffect(() => {
+    setScanView((cur) => (cur ? requests.find((r) => r.id === cur.id) || null : cur));
+    setScanReject((cur) => (cur ? requests.find((r) => r.id === cur.id) || null : cur));
+  }, [requests]);
+
+  // `?review=1`: open the first scan that waits for a decision, then drop the parameter.
+  useEffect(() => {
+    if (!reviewIntent || !contract) return;
+    const clear = () =>
+      setSp(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("review");
+          return next;
+        },
+        { replace: true },
+      );
+    if (!isAdmin || !contract.scans_to_review) {
+      clear();
+      return;
+    }
+    const first = requests.find(hasPendingScan);
+    if (first) {
+      setScanView(first);
+      clear();
+    }
+  }, [reviewIntent, contract, requests, isAdmin, setSp]);
 
   // NCALayer probe: keeps retrying every 5 s until it answers. Only the admin signs.
   useEffect(() => {
@@ -279,10 +327,11 @@ export default function ContractDetailPage() {
     }
   }
 
-  async function invite(roles) {
+  // `methods` = { student: "scan" } overrides the default of the student card for this link.
+  async function invite(roles, methods) {
     setBusyKey("invite");
     try {
-      const data = await signingApi.invite(id, { roles });
+      const data = await signingApi.invite(id, methods ? { roles, methods } : { roles });
       const created = data.items || [];
       if (created.length === 0) {
         toast("Активные ссылки уже есть — они в блоке «Подписи сторон».");
@@ -347,7 +396,9 @@ export default function ContractDetailPage() {
   async function resend(req) {
     const ok = await confirm({
       title: "Выпустить новую ссылку?",
-      message: `Прежняя ссылка для «${ROLE_TITLE[req.signer_role]}» перестанет работать. Новую ссылку нужно отправить получателю заново.`,
+      message:
+        `Прежняя ссылка для «${partyTitle(req.signer_role, req.signer_capacity)}» перестанет работать. Новую ссылку нужно отправить получателю заново.` +
+        (hasPendingScan(req) ? "\n\nЗагруженный скан, который ждёт проверки, перестанет учитываться — подписанту придётся загрузить его снова." : ""),
       confirmText: "Выпустить новую",
     });
     if (!ok) return;
@@ -367,7 +418,9 @@ export default function ContractDetailPage() {
   async function revoke(req) {
     const ok = await confirm({
       title: "Отозвать ссылку?",
-      message: `Получатель («${ROLE_TITLE[req.signer_role]}») больше не сможет подписать по этой ссылке. Позже можно создать новую.`,
+      message:
+        `Получатель («${partyTitle(req.signer_role, req.signer_capacity)}») больше не сможет подписать по этой ссылке. Позже можно создать новую.` +
+        (hasPendingScan(req) ? "\n\nЗагруженный скан, который ждёт проверки, перестанет учитываться." : ""),
       confirmText: "Отозвать",
       tone: "danger",
     });
@@ -382,6 +435,101 @@ export default function ContractDetailPage() {
     } finally {
       setBusyKey("");
     }
+  }
+
+  // ── paper signing: review, upload on behalf, switch the method ─────────────────
+  const partyOf = (req) => partyTitle(req.signer_role, capacityOf({ role: req.signer_role, req, contract }));
+  const firstPendingScan = () => requests.find(hasPendingScan) || null;
+
+  async function acceptScan(req) {
+    const ok = await confirm({
+      title: "Принять скан как подпись?",
+      message:
+        `Скан станет подписью стороны «${partyOf(req)}»${req.recipient_name ? ` (${req.recipient_name})` : ""}. ` +
+        "Принимайте его, только если открыли скан и увидели подпись там, где она нужна. Отменить принятие нельзя.",
+      confirmText: "Принять скан",
+    });
+    if (!ok) return;
+    setBusyKey("scan");
+    try {
+      await signingApi.reviewScan(req.id, "accept");
+      toast.success("Скан принят — это подпись стороны");
+      setScanView(null);
+    } catch (e) {
+      toast.error(await errorText(e, "Не удалось принять скан"));
+    } finally {
+      await load(true);
+      setBusyKey("");
+    }
+  }
+
+  async function rejectScan(req, note) {
+    setBusyKey("scan");
+    try {
+      await signingApi.reviewScan(req.id, "reject", note);
+      toast.success("Скан отклонён — подписант увидит причину и сможет загрузить новый");
+      setScanReject(null);
+      setScanView(null);
+    } catch (e) {
+      toast.error(await errorText(e, "Не удалось отклонить скан"));
+    } finally {
+      await load(true);
+      setBusyKey("");
+    }
+  }
+
+  async function adminUpload(req, files) {
+    const problem = validateScanFiles(files);
+    if (problem) {
+      toast.error(problem);
+      return;
+    }
+    const ok = await confirm({
+      title: "Загрузить скан за подписанта?",
+      message:
+        `Скан будет сразу принят как подпись стороны «${partyOf(req)}»${req.recipient_name ? ` (${req.recipient_name})` : ""} — без отдельной проверки. ` +
+        "Загружайте его, только если вы видели, что договор подписан." +
+        (hasPendingScan(req) ? "\n\nСкан, который загрузил сам подписант, будет заменён." : "") +
+        "\n\nОтменить это нельзя.",
+      confirmText: "Загрузить и принять",
+      tone: "danger",
+    });
+    if (!ok) return;
+    setBusyKey("scan");
+    const t = toast.loading("Загружаем скан…");
+    try {
+      await signingApi.adminUploadScan(req.id, files, true);
+      toast.success("Скан загружен и принят как подпись", { id: t });
+    } catch (e) {
+      toast.error(await errorText(e, "Не удалось загрузить скан"), { id: t });
+    } finally {
+      await load(true);
+      setBusyKey("");
+    }
+  }
+
+  async function changeMethod(req, method) {
+    setBusyKey("method");
+    try {
+      await signingApi.setMethod(req.id, method);
+      toast.success(
+        method === "scan"
+          ? "Теперь подписант загружает скан. Ссылка осталась прежней — предупредите его."
+          : "Теперь подписывать нужно ЭЦП. Ссылка осталась прежней — предупредите подписанта.",
+        { duration: 6000 },
+      );
+    } catch (e) {
+      toast.error(await errorText(e, "Не удалось сменить способ подписания"), { duration: 6000 });
+    } finally {
+      await load(true);
+      setBusyKey("");
+    }
+  }
+
+  function openReview() {
+    const first = firstPendingScan();
+    if (first) setScanView(first);
+    else scrollTo("signing-parties");
   }
 
   // College signs from this very page with the director's ЭЦП (NCALayer).
@@ -600,6 +748,7 @@ export default function ContractDetailPage() {
     ({
       generate: { label: "Сформировать договор", run: runGenerate, key: "generate" },
       invite: { label: "Отправить на подпись", run: () => invite(["partner", "student"]), key: "invite" },
+      review_scan: { label: "Проверить скан", run: openReview, key: "scan" },
       complete: { label: "Завершить договор", run: () => setStatus("completed"), key: "status" },
     }[action] ||
       null);
@@ -643,6 +792,7 @@ export default function ContractDetailPage() {
           onSignCollege={() => signSelf("college")}
           onGoParties={() => scrollTo("signing-parties")}
           onGoScan={() => scrollTo("scan-section")}
+          onReviewScan={openReview}
         />
 
         {showReadiness && (
@@ -680,6 +830,11 @@ export default function ContractDetailPage() {
               onResend={resend}
               onRevoke={revoke}
               onSignCollege={() => signSelf("college")}
+              onViewScan={setScanView}
+              onAcceptScan={acceptScan}
+              onRejectScan={setScanReject}
+              onAdminUpload={adminUpload}
+              onSetMethod={changeMethod}
             />
 
             <SectionCard
@@ -757,6 +912,10 @@ export default function ContractDetailPage() {
                   {contract.practice_start ? `${formatDate(contract.practice_start)} — ${formatDate(contract.practice_end)}` : ""}
                 </InfoRow>
                 <InfoRow label="Год договора">{contract.year}</InfoRow>
+                <InfoRow label="Кто подписывает за студента">
+                  {(contract.student_signer === CAPACITY_REP ? `Законный представитель (${REP_REASON})` : "Сам студент") +
+                    (contract.student_sign_method === "scan" ? " · на бумаге, со сканом" : " · ЭЦП")}
+                </InfoRow>
                 <InfoRow label="Создан">{fmtDateTime(contract.created_at)}</InfoRow>
                 <InfoRow label="Обновлён">{fmtDateTime(contract.updated_at)}</InfoRow>
               </div>
@@ -853,7 +1012,7 @@ export default function ContractDetailPage() {
                 <SectionCard
                   title="Скан подписанного договора"
                   icon={FileUp}
-                  description="Необязательно: загрузите, если договор подписывали на бумаге."
+                  description="Необязательно: общий скан полностью подписанного бумажного оригинала. Сканы отдельных сторон загружают сами подписанты — они в блоке «Подписи сторон»."
                 >
                   {contract.signed_scan_path && (
                     <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-900 ring-1 ring-emerald-200">
@@ -909,7 +1068,12 @@ export default function ContractDetailPage() {
               {isAdmin && <NCABadge available={ncaAvailable} />}
               <div className={clsx("space-y-3", isAdmin && "mt-4")}>
                 {ROLES.map((role) => (
-                  <SignatureCard key={role} role={role} sig={(contract.signatures || []).find((s) => s.signer_role === role)} />
+                  <SignatureCard
+                    key={role}
+                    role={role}
+                    sig={(contract.signatures || []).find((s) => s.signer_role === role)}
+                    capacity={role === "student" ? capacityOf({ role, req: requests.find((r) => r.signer_role === role && r.status !== "revoked"), contract }) : "self"}
+                  />
                 ))}
               </div>
             </SectionCard>
@@ -924,6 +1088,27 @@ export default function ContractDetailPage() {
         onClose={() => setShare(null)}
       />
       <BulkLinksModal result={linksResult} onClose={() => setLinksResult(null)} />
+      {isAdmin && (
+        <>
+          <ScanViewModal
+            request={scanView}
+            partyLabel={scanView ? partyOf(scanView) : ""}
+            contractNumber={contract.number}
+            canDecide={isAdmin}
+            busy={busyKey === "scan"}
+            onClose={() => setScanView(null)}
+            onAccept={acceptScan}
+            onReject={setScanReject}
+          />
+          <RejectScanModal
+            request={scanReject}
+            partyLabel={scanReject ? partyOf(scanReject) : ""}
+            busy={busyKey === "scan"}
+            onClose={() => setScanReject(null)}
+            onSubmit={rejectScan}
+          />
+        </>
+      )}
       <DocumentPreviewModal
         open={previewOpen}
         onClose={() => setPreviewOpen(false)}

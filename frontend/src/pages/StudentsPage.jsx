@@ -23,7 +23,7 @@ import BulkContractsWizard from "../components/contracts/BulkContractsWizard.jsx
 import { COURSES, GROUP_NONE } from "../components/students/studentUtils.js";
 
 // Params that live in the URL (everything the list is filtered by).
-const FILTER_KEYS = ["q", "group", "partner_id", "contract", "no_partner", "course", "is_grant"];
+const FILTER_KEYS = ["q", "group", "partner_id", "contract", "no_partner", "course", "is_grant", "sign_method"];
 
 export default function StudentsPage() {
   const { isAdmin } = useAuth();
@@ -39,8 +39,9 @@ export default function StudentsPage() {
   const noPartner = params.get("no_partner") === "1";
   const course = params.get("course") || "";
   const grantF = params.get("is_grant") || "";
-  const hasFilters = !!(urlQ || group || partnerId || contractF || noPartner || course || grantF);
-  const filterKey = [urlQ, group, partnerId, contractF, noPartner ? 1 : 0, course, grantF].join("|");
+  const signF = params.get("sign_method") === "scan" ? "scan" : ""; // «Только на бумаге»
+  const hasFilters = !!(urlQ || group || partnerId || contractF || noPartner || course || grantF || signF);
+  const filterKey = [urlQ, group, partnerId, contractF, noPartner ? 1 : 0, course, grantF, signF].join("|");
 
   const updateParams = useCallback(
     (patch) => {
@@ -99,6 +100,7 @@ export default function StudentsPage() {
     if (noPartner) p.no_partner = 1;
     if (contractF) p.contract = contractF;
     if (grantF) p.is_grant = grantF;
+    if (signF) p.sign_method = signF;
     setLoading(true);
     try {
       const r = await studentsApi.list(p);
@@ -205,7 +207,7 @@ export default function StudentsPage() {
   const selectedIds = useMemo(() => [...selected], [selected]);
 
   // ── dialogs ───────────────────────────────────────────────────────────────
-  const [formState, setFormState] = useState({ open: false, student: null });
+  const [formState, setFormState] = useState({ open: false, student: null, tab: undefined });
   const [importOpen, setImportOpen] = useState(false);
   const [bulkPracticeOpen, setBulkPracticeOpen] = useState(false);
   const [bulkContractsOpen, setBulkContractsOpen] = useState(false);
@@ -214,13 +216,14 @@ export default function StudentsPage() {
   const [exporting, setExporting] = useState(false);
   const [grantBusy, setGrantBusy] = useState(null);
 
-  function openEditor(student) {
-    setFormState({ open: true, student });
+  function openEditor(student, tab) {
+    setFormState({ open: true, student, tab });
     loadPartners(); // a partner added in another tab shows up without a reload
   }
 
   // Deep links: ?edit=<id> ?new=1 ?import=1 — handled once, then removed.
   const editParam = params.get("edit");
+  const tabParam = params.get("tab"); // ?edit=5&tab=rep opens the card on the «Законный представитель» tab
   const newParam = params.get("new");
   const importParam = params.get("import");
   const handled = useRef({});
@@ -248,7 +251,7 @@ export default function StudentsPage() {
     }
     if (!loadedOnce || handled.current.edit === editParam) return;
     handled.current.edit = editParam;
-    updateParams({ edit: null });
+    updateParams({ edit: null, tab: null });
     if (!isAdmin) return;
     (async () => {
       const id = Number(editParam);
@@ -270,7 +273,7 @@ export default function StudentsPage() {
           return;
         }
       }
-      openEditor(student);
+      openEditor(student, tabParam || undefined);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editParam, loadedOnce, isAdmin]);
@@ -447,7 +450,7 @@ export default function StudentsPage() {
 
       {!databaseEmpty && (
         <div className="card mb-3 p-3 sm:p-4">
-          <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-[minmax(0,1.6fr)_repeat(4,minmax(0,1fr))]">
+          <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-[minmax(0,1.6fr)_repeat(5,minmax(0,1fr))]">
             <SearchInput
               className="col-span-2 lg:col-span-1"
               value={qInput}
@@ -499,6 +502,16 @@ export default function StudentsPage() {
               <option value="">Грант</option>
               <option value="1">Только грантники</option>
               <option value="0">Не грантники</option>
+            </select>
+            <select
+              className="input col-span-2 lg:col-span-1"
+              value={signF}
+              onChange={(e) => updateParams({ sign_method: e.target.value || null })}
+              aria-label="Подписание"
+              title="Как студент подписывает договор практики"
+            >
+              <option value="">Подписание</option>
+              <option value="scan">Только на бумаге</option>
             </select>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -658,6 +671,7 @@ export default function StudentsPage() {
             partners={partners}
             specialties={specialties}
             groups={groupNames}
+            initialTab={formState.tab}
             onClose={() => setFormState({ open: false, student: null })}
             onSaved={() => {
               setFormState({ open: false, student: null });

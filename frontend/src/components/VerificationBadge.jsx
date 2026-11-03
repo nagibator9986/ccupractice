@@ -1,4 +1,4 @@
-import { CircleHelp, Link2, Lock, ShieldCheck, TriangleAlert } from "lucide-react";
+import { CircleHelp, FileCheck2, Link2, Lock, ShieldCheck, TriangleAlert } from "lucide-react";
 
 // Shows how strongly the server verified an ЭЦП signature, so the admin sees the
 // real assurance level per signature (RSA/ECDSA are fully verified; KZ GOST is
@@ -21,6 +21,14 @@ const LEVELS = {
     cls: "bg-blue-100 text-blue-700",
     icon: Link2,
     title: "ГОСТ-подпись: подтверждена привязка к этому файлу (Streebog). Личность и срок действия сертификата проверены.",
+  },
+  // Paper: there is no certificate to verify. Deliberately NOT green — a scan accepted by a clerk is
+  // weaker evidence than a checked ЭЦП and must never look like «Проверено».
+  scan: {
+    label: "Скан принят колледжем",
+    cls: "bg-blue-100 text-blue-700",
+    icon: FileCheck2,
+    title: "Подпись поставлена от руки на бумаге. Криптографической проверки нет: скан просмотрел и принял сотрудник колледжа, а его SHA-256 сохранён и сверяется на странице проверки.",
   },
   accepted: {
     label: "ГОСТ: принято",

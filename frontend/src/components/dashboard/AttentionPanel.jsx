@@ -1,9 +1,10 @@
 import { Link } from "react-router-dom";
-import { ChevronRight, CircleCheck, FileClock, GraduationCap, Handshake, Send, TimerOff, TriangleAlert } from "lucide-react";
+import { ChevronRight, CircleCheck, FileClock, FileSearch, GraduationCap, Handshake, Send, TimerOff, TriangleAlert } from "lucide-react";
 import SectionCard from "../SectionCard.jsx";
 import EmptyState from "../EmptyState.jsx";
 
 const ICONS = {
+  scan: FileSearch,
   timer: TimerOff,
   send: Send,
   draft: FileClock,
@@ -69,7 +70,7 @@ export default function AttentionPanel({ groups }) {
           compact
           icon={CircleCheck}
           title="Всё в порядке"
-          description="Нет просроченных ссылок, зависших договоров и неполных данных."
+          description="Нет сканов на проверке, просроченных ссылок, зависших договоров и неполных данных."
         />
       </SectionCard>
     );

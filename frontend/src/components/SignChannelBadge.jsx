@@ -1,4 +1,4 @@
-import { Laptop, Smartphone } from "lucide-react";
+import { FileSignature, Laptop, Smartphone } from "lucide-react";
 
 const CHANNELS = {
   egov_mobile: {
@@ -13,6 +13,14 @@ const CHANNELS = {
     cls: "bg-charcoal-100 text-charcoal-700",
     title: "Подписано через NCALayer ключом ЭЦП на компьютере. Подписан DOCX-вариант договора.",
   },
+  // Paper: no file format to show — the evidence is the scan itself.
+  scan: {
+    label: "Скан · бумага",
+    icon: FileSignature,
+    cls: "bg-teal-100 text-teal-800",
+    title: "Подписано от руки на бумажной копии. Подписью стал скан, который проверил и принял колледж.",
+    noFormat: true,
+  },
 };
 
 /** How a signature was made: app + which file version it covers. */
@@ -22,7 +30,7 @@ export default function SignChannelBadge({ channel, payloadFormat, className = "
   return (
     <span className={`badge ${it.cls} ${className}`} title={it.title}>
       <it.icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-      {it.label} · {fmt}
+      {it.noFormat ? it.label : `${it.label} · ${fmt}`}
     </span>
   );
 }

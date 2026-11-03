@@ -1,4 +1,4 @@
-import { BadgeCheck, CircleCheck, FilePlus2, Hourglass, Send } from "lucide-react";
+import { BadgeCheck, CircleCheck, FilePlus2, FileSearch, Hourglass, Send } from "lucide-react";
 import clsx from "clsx";
 import { toneOf } from "../../utils/tones.js";
 import { NEXT_ACTION_META } from "./contractFlow.js";
@@ -6,6 +6,7 @@ import { NEXT_ACTION_META } from "./contractFlow.js";
 const ICONS = {
   generate: FilePlus2,
   invite: Send,
+  review_scan: FileSearch,
   await_signatures: Hourglass,
   complete: CircleCheck,
   done: BadgeCheck,

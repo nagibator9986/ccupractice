@@ -115,13 +115,26 @@ group → generate → send signing links → collect ЭЦП.
   422 `incomplete` unless `allow_incomplete`; bulk creation skips such students and says why.
 - **Guards**: duplicate (student+partner+year) → 409 `duplicate_contract`; deleting or
   re-dating a contract that has signatures/scan → 409 `has_signatures` unless `force`.
-- **`Contract.next_action`** (`generate → invite → await_signatures → complete → done`) is
+- **`Contract.next_action`** (`generate → invite → review_scan → await_signatures → complete → done`) is
   the single definition used by list, card and dashboard — don't re-derive it in the UI.
 - **Bulk**: `POST /contracts/bulk` (dry_run supported; DB only — PDFs are generated one by
   one by the SPA with a progress bar because LibreOffice takes seconds per file),
   `POST /signing/bulk-invite` (idempotent: never a second live token per role),
   `POST /signing/links-export` (xlsx of live links + ready-to-paste messages),
   `POST /students/bulk-practice`, `POST /students/bulk-delete` (skips students with contracts).
+- **Who signs the student's side, and how** (`utils/signers.py`, `api/party_scan.py`,
+  `services/scan_store.py`). Student **< 16 on the contract date** (same threshold as the enrollment
+  matrix) → the **legal representative** signs: the link/recipient/phone/ИИН come from `legal_rep_*`,
+  readiness makes their ФИО+ИИН critical, `SigningRequest.signer_capacity` / `Signature.signer_capacity`
+  record it, labels come from `role_label()`. Independently, every link has a **method**:
+  `SigningRequest.method` = `ecp` | `scan`, defaulting from `Student.sign_method` (set per student, in
+  bulk, or by the «Способ подписания» / «Проживает за пределами РК» Excel columns). On a `scan` link the
+  ЭЦП endpoints answer 409 `scan_only`; the signer prints, signs by hand and uploads a PDF or up to 10
+  photos (merged into ONE pdf, validated by content, never by file name) → `scan_review = pending` →
+  the college accepts (writes `Signature(channel="scan", payload_format="scan", verification_level="scan")`,
+  hash = the scan's SHA-256, re-checked on the public verify page) or rejects with a mandatory reason
+  (the link stays open). A scan NEVER counts before acceptance; `Contract.next_action` shows
+  `review_scan`. The college can also upload a scan on the party's behalf (`scan/upload`).
 - Public signing surface masks identifiers (`bin_masked`, `iin_masked`) and serves the PDF
   inline (`?inline=1`) with the signature annex once anyone has signed.
 - **Tests**: `cd backend && .venv/bin/python -m unittest discover -s tests` (stdlib only,

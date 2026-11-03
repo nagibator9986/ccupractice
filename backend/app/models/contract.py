@@ -86,16 +86,47 @@ class Contract(db.Model):
         return [r for r in SIGNER_ROLES if r in live]
 
     @property
+    def student_signer(self) -> str:
+        """«self» or «legal_representative» — who signs for the student's side, by age on the
+        contract date (see utils/signers.py). Once a link exists its own ``signer_capacity``
+        is what counts; this is the live answer for new links and labels."""
+        from ..utils.signers import student_capacity
+
+        return student_capacity(self.student, self.contract_date)
+
+    @property
+    def paper_roles(self) -> list[str]:
+        """Roles that sign — or already signed — on paper: the live link was issued for a scan, or
+        the accepted signature came from one. Lets the list mark every paper party, not only the
+        student's default."""
+        live = {
+            r.signer_role for r in (self.signing_requests or [])
+            if r.method == "scan" and r.status != "revoked"
+        }
+        done = {s.signer_role for s in (self.signatures or []) if s.channel == "scan"}
+        both = live | done
+        return [r for r in SIGNER_ROLES if r in both]
+
+    @property
+    def scans_to_review(self) -> int:
+        return sum(
+            1 for r in (self.signing_requests or [])
+            if r.scan_review == "pending" and r.status in ("pending", "viewed")
+        )
+
+    @property
     def next_action(self) -> str:
         """The single thing the workflow is waiting for — one definition shared
         by the list, the card and the dashboard so they can never disagree.
 
-        generate → invite → await_signatures → complete → done
+        generate → invite → (review_scan) → await_signatures → complete → done
         """
         if self.status == ContractStatus.COMPLETED:
             return "done"
         if not self.docx_path:
             return "generate"
+        if self.scans_to_review:
+            return "review_scan"
         signed = set(self.signed_roles)
         if len(signed) == len(SIGNER_ROLES):
             return "complete"
@@ -133,6 +164,10 @@ class Contract(db.Model):
             "signed_roles": self.signed_roles,
             "invited_roles": self.invited_roles,
             "next_action": self.next_action,
+            "student_signer": self.student_signer,
+            "student_sign_method": (self.student.sign_method if self.student else None) or "ecp",
+            "scans_to_review": self.scans_to_review,
+            "paper_roles": self.paper_roles,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

@@ -215,8 +215,46 @@ export const signingApi = {
   // → { new_links, items: [{contract_id, number, student_name, group_name,
   //      status: "ok"|"skipped", reason, links: [{id, signer_role, recipient_name,
   //      recipient_phone, sign_url, token, expires_at, is_new, ...}]}] }
-  bulkInvite: (contract_ids, roles = ["partner", "student"]) =>
-    client.post("/signing/bulk-invite", { contract_ids, roles }, { timeout: 120_000 }).then((r) => r.data),
+  // `methods` = { student: "scan" } overrides the per-student default («ЭЦП» unless the student card says «Скан»).
+  bulkInvite: (contract_ids, roles = ["partner", "student"], methods) =>
+    client
+      .post("/signing/bulk-invite", { contract_ids, roles, ...(methods ? { methods } : {}) }, { timeout: 120_000 })
+      .then((r) => r.data),
+
+  // ── Signing on paper: the party signs a printout and uploads a scan; the college reviews it ──
+  // Public (signer). `files` = File[]: ONE pdf, or up to 10 photos (jpg/png) that the server merges into one pdf.
+  // → { ok, scan:{uploaded_at,name,review,review_note,has_file} }; errors: 400 bad_scan, 409 not_scan|signed|no_document, 410.
+  uploadScan: (token, files) => {
+    const form = new FormData();
+    [...files].forEach((f) => form.append("files", f));
+    return client.post(`/signing/public/${token}/scan`, form, { timeout: 180_000 }).then((r) => r.data);
+  },
+  // The signer's own upload, inline PDF (use as <iframe src> / link target).
+  publicScanFileUrl: (token) => `${API_PREFIX}/signing/public/${token}/scan/file`,
+  // College (admin). Authenticated: returns an object URL for <iframe src> — the CALLER must revoke it.
+  previewScan: async (requestId) => {
+    const res = await client.get(`/signing/requests/${requestId}/scan`, { params: { inline: 1 }, responseType: "blob" });
+    return URL.createObjectURL(res.data);
+  },
+  downloadScan: async (requestId, filename = "scan.pdf") => {
+    const res = await client.get(`/signing/requests/${requestId}/scan`, { responseType: "blob" });
+    saveBlob(res, filename);
+  },
+  // decision: "accept" (becomes the party's signature) | "reject" (note REQUIRED — the signer sees it).
+  // → { ok, item (request), contract_status }
+  reviewScan: (requestId, decision, note) =>
+    client.post(`/signing/requests/${requestId}/scan/review`, { decision, ...(note ? { note } : {}) }).then((r) => r.data),
+  // The paper came through another channel (WhatsApp, e-mail): attach it for the party.
+  // accept=true (default) also records it as the signature right away.
+  adminUploadScan: (requestId, files, accept = true) => {
+    const form = new FormData();
+    [...files].forEach((f) => form.append("files", f));
+    form.append("accept", accept ? "1" : "0");
+    return client.post(`/signing/requests/${requestId}/scan/upload`, form, { timeout: 180_000 }).then((r) => r.data);
+  },
+  // Switch an OPEN link between "ecp" and "scan" (409 scan_pending while a scan awaits review).
+  setMethod: (requestId, method) =>
+    client.post(`/signing/requests/${requestId}/method`, { method }).then((r) => r.data),
   // .xlsx with every live link + a ready-to-paste message per row.
   exportLinks: async (contract_ids, roles) => {
     const res = await client.post(

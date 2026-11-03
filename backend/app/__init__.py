@@ -221,6 +221,7 @@ def create_app() -> Flask:
     from .api.lms_contracts import bp as lms_contracts_bp
     from .api.verify import bp as verify_bp
     from .api.egov_sign import bp as egov_sign_bp
+    from .api.party_scan import bp as party_scan_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(partners_bp, url_prefix="/api/partners")
@@ -236,6 +237,7 @@ def create_app() -> Flask:
     app.register_blueprint(lms_contracts_bp, url_prefix="/api/lms-contracts")
     app.register_blueprint(verify_bp, url_prefix="/api/verify")
     app.register_blueprint(egov_sign_bp, url_prefix="/api")
+    app.register_blueprint(party_scan_bp, url_prefix="/api")
 
     @app.get("/api/health")
     def health():

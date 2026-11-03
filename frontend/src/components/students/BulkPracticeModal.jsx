@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CircleCheck, Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
 import Modal from "../Modal.jsx";
-import { CheckboxField } from "../Field.jsx";
+import { CheckboxField, SelectField } from "../Field.jsx";
 import InlineAlert from "./InlineAlert.jsx";
 import PracticeFields from "./PracticeFields.jsx";
 import { errorText, partnersApi, studentsApi } from "../../api/endpoints.js";
@@ -26,6 +26,7 @@ export default function BulkPracticeModal(props) {
 function BulkPracticeBody({ onClose, onDone, studentIds, group, groupLabel, count }) {
   const [values, setValues] = useState({ ...EMPTY_PRACTICE });
   const [onlyEmpty, setOnlyEmpty] = useState(false);
+  const [signMethod, setSignMethod] = useState(""); // "" = не менять
   const [partners, setPartners] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -60,6 +61,7 @@ function BulkPracticeBody({ onClose, onDone, studentIds, group, groupLabel, coun
   }, [groupLabel, byIds, studentIds, group]);
 
   const fields = cleanPractice(values, { course: false });
+  if (signMethod) fields.sign_method = signMethod; // not part of PracticeFields (shared with the import wizard)
   const hasFields = Object.keys(fields).length > 0;
   const invalid = Object.keys(validatePractice(values)).length > 0;
   const hasTarget = byIds || group !== undefined;
@@ -126,6 +128,17 @@ function BulkPracticeBody({ onClose, onDone, studentIds, group, groupLabel, coun
             Заполните только то, что нужно изменить: пустые поля остаются как есть и ничего не стирают.
           </p>
           <PracticeFields value={values} onChange={patch} partners={partners} count={total} />
+          <SelectField
+            label="Способ подписания"
+            value={signMethod}
+            onChange={setSignMethod}
+            options={[
+              { value: "ecp", label: "ЭЦП" },
+              { value: "scan", label: "Скан — на бумаге, подписанный договор загружают сканом" },
+            ]}
+            placeholder="— не менять —"
+            hint="Как студенты (или их законные представители) подписывают договор практики. Действует и при «Менять только пустые поля»."
+          />
           <CheckboxField
             label="Режим"
             text="Менять только пустые поля"

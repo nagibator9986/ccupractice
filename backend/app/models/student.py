@@ -52,6 +52,11 @@ class Student(db.Model):
         index=True,
     )
 
+    # How this student's side of the practice contract is signed: «ecp» (electronic,
+    # NCALayer / eGov mobile) or «scan» (signed on paper, scan uploaded and checked by the
+    # college) — for those who cannot get an ЭЦП, e.g. living abroad.
+    sign_method = db.Column(db.String(10), nullable=False, default="ecp", server_default="ecp")
+
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=utc_now)
     updated_at = db.Column(db.DateTime, default=utc_now, onupdate=utc_now)
@@ -84,6 +89,7 @@ class Student(db.Model):
             "practice_type": self.practice_type,
             "form_of_study": self.form_of_study,
             "is_grant_student": bool(self.is_grant_student),
+            "sign_method": self.sign_method or "ecp",
             "notes": self.notes,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

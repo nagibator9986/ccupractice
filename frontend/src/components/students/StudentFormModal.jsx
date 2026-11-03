@@ -1,5 +1,5 @@
 import { useId, useMemo, useState } from "react";
-import { CircleAlert, Loader2 } from "lucide-react";
+import { CircleAlert, Loader2, TriangleAlert } from "lucide-react";
 import toast from "react-hot-toast";
 import Modal from "../Modal.jsx";
 import Tabs from "../Tabs.jsx";
@@ -8,6 +8,7 @@ import { CheckboxField, SelectField, TextArea, TextField } from "../Field.jsx";
 import InlineAlert from "./InlineAlert.jsx";
 import { studentsApi } from "../../api/endpoints.js";
 import { PRACTICE_TYPES, activeLms, partnerLabel } from "./studentUtils.js";
+import { SIGN_METHOD_PAPER_LABEL, isUnder16 } from "./studentSigning.js";
 
 const EMPTY = {
   full_name: "",
@@ -33,6 +34,8 @@ const EMPTY = {
   enrollment_year: new Date().getFullYear(),
   practice_type: "профессиональной",
   form_of_study: "очная",
+  // How the practice contract is signed: «ecp» (default) or «scan» (paper + scan).
+  sign_method: "ecp",
   // Gates standalone LMS-contract creation. Present in EMPTY so the CREATE form
   // can set it — without it every new student was born non-grant and could
   // never appear in the LMS create-picker. On EDIT the row's real value wins.
@@ -93,9 +96,9 @@ export default function StudentFormModal(props) {
   return <StudentFormBody key={props.student?.id ?? "new"} {...props} />;
 }
 
-function StudentFormBody({ student, onClose, onSaved, partners = [], specialties = [], groups = [] }) {
+function StudentFormBody({ student, onClose, onSaved, partners = [], specialties = [], groups = [], initialTab }) {
   const [form, setForm] = useState(() => ({ ...EMPTY, ...(student || {}) }));
-  const [tab, setTab] = useState("main");
+  const [tab, setTab] = useState(() => (TABS.some((t) => t.value === initialTab) ? initialTab : "main"));
   const [showErrors, setShowErrors] = useState(false);
   const [busy, setBusy] = useState(false);
   const [serverError, setServerError] = useState("");
@@ -111,11 +114,19 @@ function StudentFormBody({ student, onClose, onSaved, partners = [], specialties
   const visible = showErrors ? errors : {};
   const tabHasError = (t) => Object.keys(visible).some((k) => FIELD_TAB[k] === t);
 
-  const tabOptions = TABS.map((t) =>
-    tabHasError(t.value)
-      ? { ...t, icon: <CircleAlert className="h-4 w-4 shrink-0 text-red-500" aria-hidden="true" /> }
-      : t,
-  );
+  // Under 16 today (by birth date, else by the ИИН): the legal representative signs the contract.
+  const minor = useMemo(() => isUnder16({ birth_date: form.birth_date, iin: form.iin }), [form.birth_date, form.iin]);
+  const repMissing = minor && (!String(form.legal_rep_full_name ?? "").trim() || !String(form.legal_rep_iin ?? "").trim());
+
+  const tabOptions = TABS.map((t) => {
+    if (tabHasError(t.value)) {
+      return { ...t, icon: <CircleAlert className="h-4 w-4 shrink-0 text-red-500" aria-hidden="true" /> };
+    }
+    if (t.value === "rep" && repMissing) {
+      return { ...t, icon: <TriangleAlert className="h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" /> };
+    }
+    return t;
+  });
 
   // Qualification isn't stored on a student; take it from the dictionary row
   // that matches name + code so the picker shows the current choice.
@@ -143,6 +154,7 @@ function StudentFormBody({ student, onClose, onSaved, partners = [], specialties
       const payload = { ...form };
       for (const k of STRIP_ON_SAVE) delete payload[k];
       if (payload.partner_id === "") payload.partner_id = null;
+      payload.sign_method = payload.sign_method === "scan" ? "scan" : "ecp";
       let item;
       if (isEdit) {
         item = (await studentsApi.update(student.id, payload)).item;
@@ -344,6 +356,22 @@ function StudentFormBody({ student, onClose, onSaved, partners = [], specialties
             </div>
             <TextField label="Руководитель практики от колледжа" value={form.college_supervisor} onChange={set("college_supervisor")} />
             <TextField label="Руководитель практики от предприятия" value={form.partner_supervisor} onChange={set("partner_supervisor")} />
+            <div className="md:col-span-2">
+              <SelectField
+                label="Способ подписания договора практики"
+                value={form.sign_method === "scan" ? "scan" : ""}
+                onChange={(v) => set("sign_method")(v === "scan" ? "scan" : "ecp")}
+                options={[{ value: "scan", label: SIGN_METHOD_PAPER_LABEL }]}
+                placeholder="ЭЦП (по умолчанию)"
+                hint={
+                  form.sign_method === "scan"
+                    ? `${minor ? "Подписывает законный представитель: " : ""}ссылка откроет страницу, где нужно скачать договор, подписать его от руки и загрузить скан. Колледж проверит скан и примет его как подпись.`
+                    : minor
+                    ? "Договор подписывает законный представитель — ЭЦП, если она у него есть."
+                    : "Подписывается электронной подписью (NCALayer или eGov mobile)."
+                }
+              />
+            </div>
           </div>
         )}
 
@@ -361,14 +389,43 @@ function StudentFormBody({ student, onClose, onSaved, partners = [], specialties
 
         {tab === "rep" && (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <p className="text-sm text-charcoal-500 md:col-span-2">
-              Заполняется, если студент несовершеннолетний: законный представитель подписывает от его имени.
-            </p>
             <div className="md:col-span-2">
-              <TextField label="ФИО законного представителя" value={form.legal_rep_full_name} onChange={set("legal_rep_full_name")} />
+              {minor ? (
+                <InlineAlert tone="amber" title="Студент младше 16 лет">
+                  Договор практики подписывает законный представитель. Заполните его ФИО, ИИН и телефон — ссылка на подпись
+                  придёт именно ему, а без ФИО и ИИН договор нельзя нормально сформировать.
+                </InlineAlert>
+              ) : (
+                <p className="text-sm text-charcoal-500">
+                  Заполняется для студентов младше 16 лет: договор практики подписывает законный представитель. Если студенту уже
+                  есть 16 лет — оставьте пустым.
+                </p>
+              )}
             </div>
-            <TextField label="ИИН представителя" value={form.legal_rep_iin} onChange={set("legal_rep_iin")} hint="12 цифр" inputMode="numeric" />
-            <TextField label="Телефон представителя" value={form.legal_rep_phone} onChange={set("legal_rep_phone")} inputMode="tel" />
+            <div className="md:col-span-2">
+              <TextField
+                label="ФИО законного представителя"
+                value={form.legal_rep_full_name}
+                onChange={set("legal_rep_full_name")}
+                required={minor}
+                hint={minor ? "Обязательно для договора" : undefined}
+              />
+            </div>
+            <TextField
+              label="ИИН представителя"
+              value={form.legal_rep_iin}
+              onChange={set("legal_rep_iin")}
+              hint={minor ? "12 цифр. Обязательно для договора" : "12 цифр"}
+              required={minor}
+              inputMode="numeric"
+            />
+            <TextField
+              label="Телефон представителя"
+              value={form.legal_rep_phone}
+              onChange={set("legal_rep_phone")}
+              hint={minor ? "Нужен, чтобы открыть WhatsApp со ссылкой на подпись" : undefined}
+              inputMode="tel"
+            />
           </div>
         )}
         {/* Enter inside an input submits; a hidden submit keeps that working. */}

@@ -3,11 +3,13 @@ import { ExternalLink, Info, Mail, MessageCircle, Send, TriangleAlert } from "lu
 import Modal from "../Modal.jsx";
 import CopyButton from "../CopyButton.jsx";
 import { whatsappUrl, formatPhone } from "../../utils/format.js";
+import SignMethodChip from "./SignMethodChip.jsx";
 import {
-  ROLE_TITLE,
   buildSignMessage,
+  buildSignText,
   daysLeft,
   expiryText,
+  partyTitle,
   signUrlOf,
 } from "./contractFlow.js";
 
@@ -18,34 +20,39 @@ import {
  *
  * request: item of signingApi.listRequests / invite / resend / bulkInvite
  *          ({ token, sign_url, signer_role, recipient_name, recipient_email,
- *             recipient_phone, expires_at, expired }).
+ *             recipient_phone, expires_at, expired, method, signer_capacity }).
+ * A «scan» link tells the person to print, sign by hand and upload a scan; for a
+ * legal representative the text names the student.
  */
 export default function ShareLinkModal({ request, contractNumber, studentName, onClose }) {
   const open = !!request;
   const url = signUrlOf(request);
+  const method = request?.method === "scan" ? "scan" : "ecp";
+  const paper = method === "scan";
+  const textArgs = request
+    ? {
+        name: request.recipient_name,
+        number: contractNumber,
+        studentName,
+        expiresAt: request.expires_at,
+        method,
+        capacity: request.signer_capacity,
+      }
+    : null;
   const message = useMemo(
-    () =>
-      request
-        ? buildSignMessage({
-            name: request.recipient_name,
-            number: contractNumber,
-            studentName,
-            url,
-            expiresAt: request.expires_at,
-          })
-        : "",
-    [request, contractNumber, studentName, url],
+    () => (request ? buildSignMessage({ ...textArgs, url }) : ""),
+    [request, contractNumber, studentName, url], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const left = request ? daysLeft(request.expires_at) : null;
   const expired = request ? request.expired || (left != null && left < 0) : false;
   const phone = request?.recipient_phone || "";
-  const subject = `Договор практики № ${contractNumber} — на подпись`;
+  const subject = `Договор практики № ${contractNumber} — ${paper ? "подписать на бумаге и загрузить скан" : "на подпись"}`;
   const mailHref = request?.recipient_email
     ? `mailto:${request.recipient_email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}`
     : null;
   const telegramHref = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(
-    message.replace(url, "").replace(/\s+Ссылка:\s*/, " ").trim(),
+    request ? buildSignText(textArgs) : "",
   )}`;
 
   return (
@@ -54,7 +61,7 @@ export default function ShareLinkModal({ request, contractNumber, studentName, o
       onClose={onClose}
       title="Ссылка на подпись"
       description={
-        request ? `${ROLE_TITLE[request.signer_role] || "Получатель"}${request.recipient_name ? ` — ${request.recipient_name}` : ""}` : undefined
+        request ? `${partyTitle(request.signer_role, request.signer_capacity) || "Получатель"}${request.recipient_name ? ` — ${request.recipient_name}` : ""}` : undefined
       }
       size="md"
       footer={
@@ -65,6 +72,15 @@ export default function ShareLinkModal({ request, contractNumber, studentName, o
     >
       {request && (
         <div className="space-y-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <SignMethodChip method={method} />
+            <span className="min-w-0 flex-1 text-sm text-charcoal-600">
+              {paper
+                ? "Получатель скачает договор, подпишет его на бумаге и загрузит скан или фото. Скан станет подписью, когда вы его примете."
+                : "Получатель подпишет договор электронной подписью (ЭЦП)."}
+            </span>
+          </div>
+
           {expired && (
             <div className="flex gap-2 rounded-xl bg-red-50 px-3.5 py-3 text-sm text-red-800 ring-1 ring-red-200" role="alert">
               <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
@@ -94,7 +110,9 @@ export default function ShareLinkModal({ request, contractNumber, studentName, o
             </div>
             <p className="mt-1.5 text-xs text-charcoal-500">
               {request.expires_at
-                ? `Действует ${expiryText(request)}. После подписания ссылка закрывается.`
+                ? `Действует ${expiryText(request)}. ${paper ? "Ссылка закрывается, когда вы примете скан." : "После подписания ссылка закрывается."}`
+                : paper
+                ? "Ссылка закрывается, когда вы примете скан."
                 : "После подписания ссылка закрывается."}
             </p>
           </div>

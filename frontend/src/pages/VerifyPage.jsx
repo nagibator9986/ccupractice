@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { CircleCheck, ClipboardList, Download, Hourglass, Circle, ShieldCheck, PenLine, Check, TriangleAlert } from "lucide-react";
+import { CircleCheck, ClipboardList, Download, FileCheck2, Hourglass, Circle, ShieldCheck, PenLine, Check, TriangleAlert } from "lucide-react";
 import BrandLogo from "../components/BrandLogo.jsx";
 import SectionCard from "../components/SectionCard.jsx";
 import SignChannelBadge from "../components/SignChannelBadge.jsx";
 import { Skeleton } from "../components/Skeleton.jsx";
 import { verifyApi } from "../api/endpoints.js";
-import { formatDate, formatDateTime } from "../utils/format.js";
+import { formatDate, formatDateTime, plural } from "../utils/format.js";
 
 const ROLE_LABELS = {
   // Practicum (three-party): college / partner / student
@@ -22,6 +22,15 @@ const LEVEL_BADGE = {
   full:            { label: "Криптографически проверена",          cls: "bg-emerald-100 text-emerald-700" },
   document_bound:  { label: "Привязана к документу (GOST)",         cls: "bg-amber-100 text-amber-700"   },
   accepted:        { label: "Принята (без полной проверки)",        cls: "bg-amber-100 text-amber-700"   },
+  // Paper: never the green «verified» look — no certificate was checked, the college accepted a scan.
+  scan:            { label: "Подпись на бумаге — скан принят колледжем", cls: "bg-blue-100 text-blue-700" },
+};
+
+// Wording of the integrity panel per file format a signature was made over.
+const FORMAT_LABEL = {
+  docx: "Договор (DOCX)",
+  pdf: "Договор (PDF)",
+  scan: "Скан подписанного договора",
 };
 
 export default function VerifyPage() {
@@ -66,10 +75,22 @@ export default function VerifyPage() {
   const allSigned = summary.fully_signed;
   const integrityKnown = integrity.available;
   const integrityOk = integrity.match;
+  // Several signature formats (DOCX / PDF / paper scan) are checked each against its own file.
+  const byFormat = Array.isArray(integrity.by_format) ? integrity.by_format : [];
+  const paperSigs = signatures.filter((s) => s.channel === "scan");
+  const hasPaper = paperSigs.length > 0;
+  const showFormats = byFormat.length > 1 || byFormat.some((f) => f.format === "scan");
 
   // Status banner
   let banner;
-  if (allSigned && integrityKnown && integrityOk) {
+  if (allSigned && integrityKnown && integrityOk && hasPaper) {
+    // Paper signatures are weaker evidence than a checked ЭЦП: say so instead of «подлинность подтверждена».
+    banner = {
+      tone: "paper",
+      title: "Все стороны подписали; часть подписей — на бумаге",
+      sub: `${paperSigs.length} ${plural(paperSigs.length, "подпись поставлена", "подписи поставлены", "подписей поставлено")} от руки, подпись подтверждена сканом, который принял колледж.${paperSigs.length < signatures.length ? " Остальные подписи — электронные." : ""} Хэши файлов совпадают с зафиксированными при подписании.`,
+    };
+  } else if (allSigned && integrityKnown && integrityOk) {
     const partyWord = summary.required_count === 1 ? "сторона подписала"
       : summary.required_count < 5 ? "стороны подписали"
         : "сторон подписали";
@@ -148,12 +169,16 @@ export default function VerifyPage() {
             // the backend actually attested.
             const level = sig?.verification_level;
             const levelInfo = level ? LEVEL_BADGE[level] : null;
+            const representative = sig?.signer_capacity === "legal_representative";
+            const onPaper = sig?.channel === "scan" || level === "scan";
             return (
               <li key={role} className={`rounded-xl border p-4 ${sig ? "border-emerald-200 bg-emerald-50/40" : "border-charcoal-100"}`}>
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                   <div className="font-semibold text-charcoal-800">
                     Подпись №{idx + 1}{" "}
-                    <span className="text-charcoal-500 font-normal text-sm">— {ROLE_LABELS[role] || role}</span>
+                    <span className="text-charcoal-500 font-normal text-sm">
+                      — {representative ? "Законный представитель обучающегося" : ROLE_LABELS[role] || role}
+                    </span>
                   </div>
                   {sig ? (
                     <span className={`badge ${levelInfo?.cls || "bg-charcoal-100 text-charcoal-600"}`}
@@ -168,8 +193,19 @@ export default function VerifyPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-charcoal-600 mt-2">
                     <div><span className="text-charcoal-400">Подписант: </span><b className="text-charcoal-800">{sig.signer_full_name}</b></div>
                     <div><span className="text-charcoal-400">ИИН / БИН: </span>{sig.signer_iin_or_bin_masked || "—"}</div>
-                    <div><span className="text-charcoal-400">Серийный № сертификата: </span><span className="font-mono">…{sig.signer_serial_tail || "—"}</span></div>
-                    <div><span className="text-charcoal-400">Время подписания: </span>{formatDateTime(sig.created_at)}</div>
+                    {representative && (
+                      <div className="md:col-span-2 font-medium text-amber-800">
+                        Договор подписал законный представитель за обучающегося, не достигшего 16 лет.
+                      </div>
+                    )}
+                    {onPaper ? (
+                      <div className="md:col-span-2 text-charcoal-600">
+                        Подпись поставлена от руки на бумажном экземпляре. Электронного сертификата нет: подписью считается скан, который проверил и принял колледж.
+                      </div>
+                    ) : (
+                      <div><span className="text-charcoal-400">Серийный № сертификата: </span><span className="font-mono">…{sig.signer_serial_tail || "—"}</span></div>
+                    )}
+                    <div><span className="text-charcoal-400">{onPaper ? "Скан принят: " : "Время подписания: "}</span>{formatDateTime(sig.created_at)}</div>
                     {sig.channel && (
                       <div className="md:col-span-2">
                         <SignChannelBadge channel={sig.channel} payloadFormat={sig.payload_format} />
@@ -177,12 +213,12 @@ export default function VerifyPage() {
                     )}
                     {sig.signed_payload_sha256 && (
                       <div className="md:col-span-2 break-all font-mono text-[11px] text-charcoal-500">
-                        SHA-256: {sig.signed_payload_sha256}
+                        {onPaper ? "SHA-256 скана" : "SHA-256"}: {sig.signed_payload_sha256}
                       </div>
                     )}
                   </div>
                 ) : (
-                  <div className="text-xs text-charcoal-500">Ожидается ЭЦП от роли «{ROLE_LABELS[role] || role}».</div>
+                  <div className="text-xs text-charcoal-500">Ожидается подпись от роли «{ROLE_LABELS[role] || role}».</div>
                 )}
               </li>
             );
@@ -191,7 +227,45 @@ export default function VerifyPage() {
       </SectionCard>
 
       <SectionCard className="mb-5" icon={ShieldCheck} title="Целостность документа">
-        {integrityKnown ? (
+        {integrityKnown && showFormats ? (
+          <ul className="space-y-3 text-sm">
+            {byFormat.map((f) => (
+              <li key={f.format} className="rounded-xl border border-charcoal-100 p-3">
+                <div className="mb-2 font-semibold text-charcoal-800">{FORMAT_LABEL[f.format] || f.format}</div>
+                {f.available ? (
+                  <div className="space-y-2">
+                    <div className="font-mono text-xs break-all bg-charcoal-50 rounded-xl px-3 py-2">
+                      <span className="text-charcoal-400">SHA-256 подписанного:</span><br />
+                      {f.signed_payload_sha256}
+                    </div>
+                    <div className="font-mono text-xs break-all bg-charcoal-50 rounded-xl px-3 py-2">
+                      <span className="text-charcoal-400">SHA-256 {f.format === "scan" ? "хранимого скана" : "архивного файла"}:</span><br />
+                      {f.current_file_sha256}
+                    </div>
+                    <div className={`flex items-start gap-1.5 text-sm font-semibold ${f.match ? "text-emerald-700" : "text-amber-700"}`}>
+                      {f.match ? (
+                        <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                      ) : (
+                        <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                      )}
+                      {f.match
+                        ? f.format === "scan"
+                          ? "Хэши совпадают — скан не менялся после того, как его принял колледж."
+                          : "Хэши совпадают — документ не был изменён после подписания."
+                        : f.format === "scan"
+                          ? "Хэши не совпадают — хранимый скан отличается от принятого."
+                          : "Хэши не совпадают — архивный файл отличается от подписанного."}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-charcoal-500">
+                    {f.format === "scan" ? "Файл скана недоступен для сверки." : "Файл этого формата недоступен для сверки."}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : integrityKnown ? (
           <div className="space-y-2 text-sm">
             <div className="font-mono text-xs break-all bg-charcoal-50 rounded-xl px-3 py-2">
               <span className="text-charcoal-400">SHA-256 подписанного:</span><br />
@@ -225,6 +299,7 @@ export default function VerifyPage() {
         <span>
           Документ согласно п. 1 ст. 7 ЗРК от 7 января 2003 года № 370-II «Об электронном документе и электронной цифровой подписи»
           равнозначен документу на бумажном носителе при наличии действительных ЭЦП всех сторон.
+          {hasPaper && " Подписи, помеченные как «на бумаге», поставлены от руки и подтверждены сканом, а не ЭЦП."}
         </span>
       </footer>
     </Wrapper>
@@ -245,8 +320,9 @@ function Header({ banner }) {
     warn:    "bg-gradient-to-br from-amber-500 to-amber-700 text-white",
     partial: "bg-gradient-to-br from-coral-500 to-coral-700 text-white",
     pending: "bg-gradient-to-br from-charcoal-700 to-charcoal-900 text-white",
+    paper:   "bg-gradient-to-br from-blue-500 to-blue-700 text-white",
   };
-  const Icon = { ok: CircleCheck, warn: TriangleAlert, partial: Hourglass, pending: Circle }[banner.tone];
+  const Icon = { ok: CircleCheck, warn: TriangleAlert, partial: Hourglass, pending: Circle, paper: FileCheck2 }[banner.tone];
   return (
     <header className={`rounded-3xl shadow-soft p-5 sm:p-7 md:p-8 mb-6 ${tones[banner.tone]}`}>
       <div className="flex items-center gap-3 mb-5">

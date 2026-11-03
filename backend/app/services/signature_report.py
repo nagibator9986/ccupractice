@@ -93,7 +93,12 @@ def build_signature_report(contract: Contract) -> Path:
             _line(doc, "Серийный № сертификата", signature.signer_serial)
             _line(doc, "SHA-256 подписанного документа", signature.signed_payload_sha256)
             _line(doc, "Дата и время подписания (UTC)", signature.created_at.strftime("%d.%m.%Y %H:%M:%S") if signature.created_at else "—")
-            if (signature.channel or "ncalayer") == "egov_mobile":
+            if (signature.signer_capacity or "self") == "legal_representative":
+                _line(doc, "Подписал", "законный представитель обучающегося (обучающийся младше 16 лет)")
+            if (signature.channel or "ncalayer") == "scan":
+                _line(doc, "Способ подписания", "Скан документа с рукописной подписью, принят колледжем")
+                _line(doc, "Подписанный файл", "PDF со сканом подписанного договора")
+            elif (signature.channel or "ncalayer") == "egov_mobile":
                 _line(doc, "Способ подписания", "ЭЦП (CMS, приложение eGov mobile)")
                 _line(doc, "Подписанный файл", "PDF-версия договора (то, что подписант видел в приложении)")
             else:

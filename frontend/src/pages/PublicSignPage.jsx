@@ -16,8 +16,13 @@ import SignPanel from "../components/public/SignPanel.jsx";
 import SignedConfirmation from "../components/public/SignedConfirmation.jsx";
 import SecurityNote from "../components/public/SecurityNote.jsx";
 import LinkProblem from "../components/public/LinkProblem.jsx";
+import ScanSignPanel from "../components/public/ScanSignPanel.jsx";
+import ScanStatusBanner from "../components/public/ScanStatusBanner.jsx";
+import RepresentativeNote from "../components/public/RepresentativeNote.jsx";
+import { utcIso } from "../components/public/scanUtils.js";
 
 const SOON_DAYS = 3;
+const SCAN_POLL_MS = 30_000; // while the college reviews the scan, pick up its answer without a manual reload
 
 // Backend answers: 404 unknown token, 410 {code: expired|revoked}. Anything
 // else (or no response at all) is a generic, retryable problem.
@@ -33,7 +38,7 @@ function classifyError(e) {
 
 function daysLeft(iso) {
   if (!iso) return null;
-  const t = new Date(iso).getTime();
+  const t = new Date(utcIso(iso)).getTime();
   return Number.isNaN(t) ? null : Math.ceil((t - Date.now()) / 86_400_000);
 }
 
@@ -90,7 +95,23 @@ export default function PublicSignPage() {
     load();
   }, [load]);
 
+  // What this link is, as far as the hooks below need to know (the full destructuring is after the early returns).
+  const isScan = Boolean(data && (data.request?.method === "scan" || data.signing_methods?.scan === true));
+  const scanReview = data?.request?.scan?.review || null;
+  const mySignerRole = data?.request?.signer_role;
+  const alreadySigned = Boolean(
+    data &&
+      (data.signing_state?.[mySignerRole]?.status === "signed" ||
+        data.request?.status === "signed" ||
+        (isScan && scanReview === "accepted") ||
+        doneAt),
+  );
+
+  // NCALayer is only needed to sign with an ЭЦП: wait until we know this is not a paper link and
+  // not yet signed (a scan signer must never have a socket polled on their machine for nothing).
+  const probeNca = Boolean(data) && !isScan && !alreadySigned;
   useEffect(() => {
+    if (!probeNca) return undefined;
     let cancelled = false;
     let timeoutId = null;
     const probe = async () => {
@@ -105,7 +126,22 @@ export default function PublicSignPage() {
       cancelled = true;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, []);
+  }, [probeNca]);
+
+  // A scan waits for the college: refresh quietly so the signer sees accepted / rejected here.
+  const scanWaiting = isScan && !alreadySigned && scanReview === "pending";
+  useEffect(() => {
+    if (!scanWaiting) return undefined;
+    const tick = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    const id = setInterval(tick, SCAN_POLL_MS);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, [scanWaiting, load]);
 
   const number = data?.contract?.number;
   useEffect(() => {
@@ -150,7 +186,10 @@ export default function PublicSignPage() {
     }
   }
 
-  if (!data) {
+  // Expired / revoked / unknown link: show it even if the contract was on screen a moment ago
+  // (a transient network error on a background refresh must NOT hide the page — only these do).
+  const terminal = problem && problem.kind !== "generic";
+  if (!data || terminal) {
     return (
       <PublicShell>
         {problem ? (
@@ -168,8 +207,6 @@ export default function PublicSignPage() {
 
   const { request, contract, signing_state: signingState = {}, download = {} } = data;
   const role = request.signer_role;
-  const myStatus = signingState[role]?.status || request.status;
-  const alreadySigned = myStatus === "signed" || request.status === "signed" || Boolean(doneAt);
   const signedAt = signingState[role]?.signed_at || doneAt;
   const hasPdf = Boolean(download.pdf_preview || download.pdf);
   const hasDocx = Boolean(download.docx);
@@ -179,6 +216,25 @@ export default function PublicSignPage() {
   const left = daysLeft(request.expires_at);
   const expiresSoon = left !== null && left <= SOON_DAYS;
   const revision = signedCount(signingState) + (doneAt ? 1 : 0);
+  const isRepresentative = request.signer_capacity === "legal_representative";
+  const scan = request.scan || null;
+
+  // The upload went through: show "sent" at once from the answer, then confirm with a fresh load.
+  function onScanChanged(newScan) {
+    if (newScan) {
+      setData((d) =>
+        d && {
+          ...d,
+          request: { ...d.request, scan: { ...d.request.scan, ...newScan } },
+          signing_state: {
+            ...d.signing_state,
+            [d.request.signer_role]: { ...d.signing_state?.[d.request.signer_role], scan_review: newScan.review },
+          },
+        },
+      );
+    }
+    load();
+  }
 
   return (
     <PublicShell college={contract?.college}>
@@ -188,7 +244,10 @@ export default function PublicSignPage() {
         roleLabel={request.signer_role_label}
         recipientName={request.recipient_name}
         idMasked={request.recipient_iin_or_bin_masked}
+        method={isScan ? "scan" : "ecp"}
       />
+
+      {isRepresentative && <RepresentativeNote studentName={contract?.student?.full_name} />}
 
       {alreadySigned ? (
         <SignedConfirmation
@@ -198,6 +257,17 @@ export default function PublicSignPage() {
           hasPdf={hasPdf}
           hasDocx={hasDocx}
           expiresAt={request.expires_at}
+          method={isScan ? "scan" : "ecp"}
+          hasScan={Boolean(scan?.has_file)}
+          signingState={signingState}
+        />
+      ) : isScan ? (
+        <ScanStatusBanner
+          docReady={hasDocx}
+          review={scanReview}
+          scan={scan}
+          expiresAt={request.expires_at}
+          className="mb-4 sm:mb-5"
         />
       ) : !hasDocx ? (
         <StatusBanner tone="amber" icon={TriangleAlert} title="Договор ещё не готов к подписанию" className="mb-4 sm:mb-5">
@@ -227,7 +297,9 @@ export default function PublicSignPage() {
           title={left <= 0 ? "Ссылка истекает сегодня" : `Ссылка истекает через ${left} дн.`}
           className="mb-4 sm:mb-5"
         >
-          Подпишите договор заранее. Если срок истечёт, попросите колледж продлить ссылку или прислать новую.
+          {isScan
+            ? "Загрузите подписанный скан заранее. Если срок истечёт, попросите колледж продлить ссылку или прислать новую."
+            : "Подпишите договор заранее. Если срок истечёт, попросите колледж продлить ссылку или прислать новую."}
         </StatusBanner>
       )}
 
@@ -238,23 +310,36 @@ export default function PublicSignPage() {
           <DocumentPreview token={token} hasPdf={hasPdf} hasDocx={hasDocx} revision={revision} />
           <ContractFacts contract={contract} />
         </div>
-        <aside className="space-y-4 sm:space-y-5 lg:sticky lg:top-4">
-          {!alreadySigned && (
-            <SignPanel
-              ncaAvailable={ncaAvailable}
-              onRecheck={recheckNca}
-              busy={busy}
-              docReady={hasDocx}
-              onSign={sign}
-              token={token}
-              egov={data.signing_methods?.egov_mobile}
-              onEgovSigned={() => {
-                setDoneAt(new Date().toISOString());
-                load();
-              }}
-            />
-          )}
-          <SecurityNote expiresAt={request.expires_at} />
+        {/* On a phone the paper steps come BEFORE the long document: that is where the signer acts. */}
+        <aside className={`space-y-4 sm:space-y-5 lg:sticky lg:top-4 ${isScan && !alreadySigned ? "order-first lg:order-none" : ""}`}>
+          {!alreadySigned &&
+            (isScan ? (
+              <ScanSignPanel
+                token={token}
+                scan={scan}
+                capacity={request.signer_capacity}
+                recipientName={request.recipient_name}
+                docReady={hasDocx}
+                hasPdf={hasPdf}
+                hasDocx={hasDocx}
+                onChanged={onScanChanged}
+              />
+            ) : (
+              <SignPanel
+                ncaAvailable={ncaAvailable}
+                onRecheck={recheckNca}
+                busy={busy}
+                docReady={hasDocx}
+                onSign={sign}
+                token={token}
+                egov={data.signing_methods?.egov_mobile}
+                onEgovSigned={() => {
+                  setDoneAt(new Date().toISOString());
+                  load();
+                }}
+              />
+            ))}
+          <SecurityNote expiresAt={request.expires_at} method={isScan ? "scan" : "ecp"} />
         </aside>
       </div>
     </PublicShell>

@@ -159,11 +159,17 @@ def stats():
     )
     by_status = {st: 0 for st in ContractStatus.ALL}
     by_action: dict[str, int] = {}
-    expiring, stale, drafts_incomplete = [], [], []
+    expiring, stale, drafts_incomplete, scan_reviews = [], [], [], []
     for c in contracts:
         by_status[c.status] = by_status.get(c.status, 0) + 1
         by_action[c.next_action] = by_action.get(c.next_action, 0) + 1
         for r in c.signing_requests:
+            if r.scan_review == "pending" and r.status in ("pending", "viewed"):
+                scan_reviews.append({
+                    "contract_id": c.id, "number": c.number, "student_name": c.student.full_name,
+                    "role": r.signer_role, "request_id": r.id,
+                    "uploaded_at": (r.scan_uploaded_at.isoformat() + "Z") if r.scan_uploaded_at else None,
+                })
             if r.status in ("pending", "viewed") and r.expires_at and now <= r.expires_at <= now + timedelta(days=7):
                 expiring.append({
                     "contract_id": c.id, "number": c.number, "student_name": c.student.full_name,
@@ -173,7 +179,7 @@ def stats():
             stale.append({"contract_id": c.id, "number": c.number, "student_name": c.student.full_name,
                           "partner_name": c.partner.organization_name, "days": (now - c.updated_at).days})
         if c.status in (ContractStatus.DRAFT, ContractStatus.GENERATED) and len(drafts_incomplete) < 10:
-            rd = check_readiness(c.student, c.partner)
+            rd = check_readiness(c.student, c.partner, c.contract_date)
             if not rd["ok"]:
                 drafts_incomplete.append({"contract_id": c.id, "number": c.number,
                                           "student_name": c.student.full_name, "critical": rd["critical"]})
@@ -199,6 +205,8 @@ def stats():
         by_status=by_status,
         by_next_action=by_action,
         attention={
+            "scan_reviews": sorted(scan_reviews, key=lambda x: x["uploaded_at"] or "")[:20],
+            "scan_reviews_total": len(scan_reviews),
             "links_expiring": sorted(expiring, key=lambda x: x["expires_at"])[:10],
             "links_expiring_total": len(expiring),
             "stale_sent": sorted(stale, key=lambda x: -x["days"])[:10],
@@ -218,7 +226,7 @@ def readiness_preview():
     """Pre-flight check before a contract exists (create dialog)."""
     student = db.session.get(Student, parse_int(request.args.get("student_id")) or 0)
     partner = db.session.get(Partner, parse_int(request.args.get("partner_id")) or 0)
-    result = check_readiness(student, partner)
+    result = check_readiness(student, partner, parse_date(request.args.get("contract_date")))
     dup = None
     if student and partner:
         found = Contract.query.filter_by(student_id=student.id, partner_id=partner.id).order_by(Contract.id.desc()).first()
@@ -238,7 +246,7 @@ def get_contract(cid):
 def _detail(contract: Contract) -> dict:
     """Card payload: the contract plus what is still missing to generate it."""
     item = contract.to_dict(include_relations=True)
-    item["readiness"] = check_readiness(contract.student, contract.partner)
+    item["readiness"] = check_readiness(contract.student, contract.partner, contract.contract_date)
     return item
 
 
@@ -366,7 +374,7 @@ def bulk_create():
                          reason=f"Уже есть договор № {year_contracts[s.id]} за {contract_date.year} год",
                          number=year_contracts[s.id])
         else:
-            rd = check_readiness(s, partner)
+            rd = check_readiness(s, partner, contract_date)
             entry["missing"] = [m["label"] for m in rd["missing"] if m["severity"] == "critical"]
             if not rd["ok"] and skip_incomplete:
                 entry.update(action="skip", code="incomplete",
@@ -478,7 +486,7 @@ def generate_contract(cid):
     force = bool(data.get("force"))
 
     # A contract with no ИИН / dates / partner requisites is not worth signing.
-    readiness = check_readiness(contract.student, contract.partner)
+    readiness = check_readiness(contract.student, contract.partner, contract.contract_date)
     if not readiness["ok"] and not data.get("allow_incomplete"):
         crit = [m["label"] for m in readiness["missing"] if m["severity"] == "critical"]
         return jsonify(
@@ -649,7 +657,8 @@ def delete_contract(cid):
 
     # Signatures and the signed scan are evidence. Deleting them takes an
     # explicit second confirmation from the client (`force`).
-    if (contract.signatures or contract.signed_scan_path) and not get_json_safe().get("force"):
+    party_scans = [r.scan_path for r in (contract.signing_requests or []) if r.scan_path]
+    if (contract.signatures or contract.signed_scan_path or party_scans) and not get_json_safe().get("force"):
         return jsonify(
             error=f"Договор № {contract.number} подписан или содержит скан — удаление уничтожит "
                   "электронные подписи и файлы. Это необратимо.",
@@ -667,6 +676,9 @@ def delete_contract(cid):
     ):
         if rel:
             candidate_files.append(base / rel)
+
+    for rel in party_scans:
+        candidate_files.append(upload_base / rel)
 
     db.session.delete(contract)
     db.session.commit()

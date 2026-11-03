@@ -8,7 +8,8 @@ import { Pagination } from "../Pagination.jsx";
 import usePagination from "../../hooks/usePagination.js";
 import { errorText, signingApi } from "../../api/endpoints.js";
 import { plural, whatsappUrl } from "../../utils/format.js";
-import { ROLE_TITLE, buildSignMessage, expiryText, signUrlOf } from "./contractFlow.js";
+import SignMethodChip from "./SignMethodChip.jsx";
+import { buildSignMessage, expiryText, partyTitle, signUrlOf } from "./contractFlow.js";
 
 function LinkRow({ link, number, studentName }) {
   const url = signUrlOf(link);
@@ -18,13 +19,16 @@ function LinkRow({ link, number, studentName }) {
     studentName,
     url,
     expiresAt: link.expires_at,
+    method: link.method,
+    capacity: link.signer_capacity,
   });
   return (
     <li className="flex flex-col gap-2 py-2.5 sm:flex-row sm:items-center">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-          <span className="font-medium text-charcoal-800">{ROLE_TITLE[link.signer_role] || link.signer_role}</span>
+          <span className="font-medium text-charcoal-800">{partyTitle(link.signer_role, link.signer_capacity)}</span>
           {link.recipient_name && <span className="truncate text-charcoal-600">{link.recipient_name}</span>}
+          <SignMethodChip method={link.method} className="!py-0.5" />
           <span className={link.is_new ? "badge bg-emerald-100 text-emerald-700" : "badge bg-charcoal-100 text-charcoal-600"}>
             {link.is_new ? "Новая ссылка" : "Уже была выдана"}
           </span>
@@ -61,6 +65,7 @@ export default function BulkLinksModal({ result, onClose }) {
   const skipped = useMemo(() => items.filter((i) => !(i.links || []).length), [items]);
   const pg = usePagination(withLinks, 25, result);
   const linksTotal = withLinks.reduce((n, i) => n + i.links.length, 0);
+  const paperLinks = withLinks.reduce((n, i) => n + i.links.filter((l) => l.method === "scan").length, 0);
 
   async function exportExcel() {
     setExporting(true);
@@ -106,6 +111,8 @@ export default function BulkLinksModal({ result, onClose }) {
             <span>
               Платформа ничего не рассылает сама. Скопируйте ссылку или откройте WhatsApp с готовым текстом — либо скачайте
               Excel со всеми ссылками и текстами сообщений и разошлите оттуда.
+              {paperLinks > 0 &&
+                ` Ссылки «Бумага + скан» (${paperLinks}): человек распечатает договор, подпишет его и загрузит скан на странице ссылки — затем скан нужно принять в карточке договора.`}
             </span>
           </p>
 

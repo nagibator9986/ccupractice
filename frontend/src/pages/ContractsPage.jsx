@@ -213,7 +213,8 @@ export default function ContractsPage() {
   const selectedItems = useMemo(() => visible.filter((c) => selected.has(c.id)), [visible, selected]);
   const toGenerate = useMemo(() => selectedItems.filter((c) => c.next_action === "generate"), [selectedItems]);
   const toInvite = useMemo(
-    () => selectedItems.filter((c) => c.next_action === "invite" || c.next_action === "await_signatures"),
+    // review_scan too: while one scan waits, the other parties may still need their links.
+    () => selectedItems.filter((c) => ["invite", "review_scan", "await_signatures"].includes(c.next_action)),
     [selectedItems],
   );
   const exportable = useMemo(() => selectedItems.filter((c) => (c.invited_roles || []).length > 0), [selectedItems]);

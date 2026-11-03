@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
-import { ArrowRight, FilePlus2, FolderOpen, UsersRound, Upload } from "lucide-react";
+import { ArrowRight, FilePlus2, FileSearch, FolderOpen, UsersRound, Upload } from "lucide-react";
 
-const CTA_ICONS = { upload: Upload, contracts: FilePlus2, groups: UsersRound, open: FolderOpen };
+const CTA_ICONS = { upload: Upload, contracts: FilePlus2, groups: UsersRound, open: FolderOpen, scan: FileSearch };
 
 function greetingFor(date) {
   const h = date.getHours();

@@ -33,6 +33,19 @@ class SigningRequest(db.Model):
 
     signature_id = db.Column(db.Integer, db.ForeignKey("signatures.id", ondelete="SET NULL"))
 
+    # ecp  — the signer signs electronically (NCALayer / eGov mobile)
+    # scan — the signer prints, signs on paper and uploads a scan; the college reviews it
+    method = db.Column(db.String(10), nullable=False, default="ecp", server_default="ecp")
+    # Who actually signs for the student's side: «self» or «legal_representative».
+    signer_capacity = db.Column(db.String(20), nullable=False, default="self", server_default="self")
+    scan_path = db.Column(db.String(500))          # relative to UPLOAD_FOLDER
+    scan_name = db.Column(db.String(200))          # what the signer called the file
+    scan_sha256 = db.Column(db.String(64))
+    scan_uploaded_at = db.Column(db.DateTime)
+    scan_review = db.Column(db.String(12))         # None | pending | accepted | rejected
+    scan_review_note = db.Column(db.Text)
+    scan_reviewed_at = db.Column(db.DateTime)
+
     created_at = db.Column(db.DateTime, default=utc_now)
     expires_at = db.Column(db.DateTime)
 
@@ -46,7 +59,8 @@ class SigningRequest(db.Model):
         return secrets.token_urlsafe(32)
 
     @classmethod
-    def create_for(cls, contract_id: int, signer_role: str, recipient: dict, ttl_days: int = DEFAULT_TTL_DAYS) -> "SigningRequest":
+    def create_for(cls, contract_id: int, signer_role: str, recipient: dict, ttl_days: int = DEFAULT_TTL_DAYS,
+                   method: str = "ecp", capacity: str = "self") -> "SigningRequest":
         sr = cls(
             contract_id=contract_id,
             signer_role=signer_role,
@@ -55,6 +69,8 @@ class SigningRequest(db.Model):
             recipient_iin_or_bin=recipient.get("iin_or_bin"),
             token=cls.generate_token(),
             expires_at=utc_now() + timedelta(days=ttl_days),
+            method=method,
+            signer_capacity=capacity,
         )
         return sr
 
@@ -76,6 +92,16 @@ class SigningRequest(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "expires_at": self.expires_at.isoformat() if self.expires_at else None,
             "expired": self.is_expired,
+            "method": self.method or "ecp",
+            "signer_capacity": self.signer_capacity or "self",
+            "scan": {
+                "uploaded_at": (self.scan_uploaded_at.isoformat() + "Z") if self.scan_uploaded_at else None,
+                "name": self.scan_name,
+                "review": self.scan_review,
+                "review_note": self.scan_review_note,
+                "reviewed_at": (self.scan_reviewed_at.isoformat() + "Z") if self.scan_reviewed_at else None,
+                "has_file": bool(self.scan_path),
+            },
         }
         if include_token:
             data["token"] = self.token

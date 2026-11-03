@@ -31,7 +31,8 @@ from ..services.signature_service import SignatureError
 from ..services.signature_verification import verify_cms_signature
 from ..utils.serializers import get_json_safe
 from ..utils.time import utc_now
-from .signing import ROLE_LABELS, SignConflict, record_public_signature
+from .signing import SignConflict, record_public_signature
+from ..utils.signers import role_label
 
 bp = Blueprint("egov_sign", __name__)
 
@@ -81,6 +82,8 @@ def start_session(token: str):
     sr, err = _live_request(token)
     if err:
         return err
+    if (sr.method or "ecp") == "scan":
+        return jsonify(error="Для этой ссылки предусмотрено подписание на бумаге со сканом.", code="scan_only"), 409
     pdf = _pdf_bytes(sr.contract)
     if pdf is None:
         return jsonify(
@@ -192,7 +195,7 @@ def api2_get(secret: str):
     if pdf is None or hashlib.sha256(pdf).hexdigest() != session.payload_sha256:
         return _phone_error("doc_changed", 409)
     return jsonify(egov.build_documents(
-        contract=contract, role_label=ROLE_LABELS.get(sr.signer_role, sr.signer_role), pdf_bytes=pdf,
+        contract=contract, role_label=role_label(sr.signer_role, sr.signer_capacity), pdf_bytes=pdf,
     ))
 
 

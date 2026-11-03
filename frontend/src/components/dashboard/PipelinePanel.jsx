@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { CircleCheck, FileText, Hourglass, Send } from "lucide-react";
+import { CircleCheck, FileSearch, FileText, Hourglass, Send } from "lucide-react";
 import clsx from "clsx";
 import SectionCard from "../SectionCard.jsx";
 import { StackedProgress } from "../ProgressBar.jsx";
@@ -12,6 +12,7 @@ const STATUS_ORDER = ["draft", "generated", "sent", "signed", "scan_uploaded", "
 const ACTIONS = [
   { key: "generate", label: "Сформировать", hint: "договор создан, файла ещё нет", Icon: FileText, tone: "blue" },
   { key: "invite", label: "Отправить на подпись", hint: "файл готов, ссылки не отправлены", Icon: Send, tone: "indigo" },
+  { key: "review_scan", label: "Проверить скан", hint: "подписант загрузил бумагу — нужно решение", Icon: FileSearch, tone: "teal" },
   { key: "await_signatures", label: "Ждём подписи", hint: "ссылки у подписантов", Icon: Hourglass, tone: "amber" },
   { key: "complete", label: "Завершить", hint: "все подписали — осталось закрыть", Icon: CircleCheck, tone: "emerald" },
 ];
@@ -61,7 +62,7 @@ export default function PipelinePanel({ byStatus = {}, byAction = {} }) {
 
       <div className="divider my-4" />
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-charcoal-500">Что делать дальше</h3>
-      <ul className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+      <ul className="grid grid-cols-2 gap-2 lg:grid-cols-3 2xl:grid-cols-5">
         {ACTIONS.map(({ key, label, hint, Icon, tone }) => {
           const n = Number(byAction[key]) || 0;
           const t = toneOf(tone);

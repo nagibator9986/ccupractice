@@ -28,6 +28,9 @@ export function pickCta(stats, isAdmin) {
   if (k.students === 0) {
     return isAdmin ? { to: "/groups?import=1", label: "Загрузить студентов из Excel", icon: "upload" } : null;
   }
+  // A signer is waiting for the college's decision: that beats everything else.
+  const scans = Number(stats?.attention?.scan_reviews_total) || 0;
+  if (scans > 0 && isAdmin) return { to: "/contracts?stage=review_scan", label: "Проверить сканы", icon: "scan" };
   if (k.withoutContract > 0) {
     return isAdmin
       ? { to: "/groups", label: "Оформить договоры", icon: "contracts" }
@@ -41,6 +44,8 @@ export function summaryLine(stats) {
   const k = kpisFrom(stats);
   if (k.students === 0) return "В системе пока нет студентов — с них начинается оформление практики.";
   const parts = [];
+  const scans = Number(stats?.attention?.scan_reviews_total) || 0;
+  if (scans > 0) parts.push(`${scans} ${plural(scans, "скан ждёт", "скана ждут", "сканов ждут")} проверки`);
   if (k.withoutContract > 0) {
     parts.push(`${k.withoutContract} ${plural(k.withoutContract, "студент", "студента", "студентов")} без договора`);
   }
@@ -57,6 +62,14 @@ export function daysUntil(iso, now = Date.now()) {
 
 const VISIBLE = 3;
 
+// «25.11.2026, 14:30» — the stats API sends UTC timestamps with a «Z»; show them in local time.
+function fmtWhen(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 /**
  * Turns the `attention` block of /contracts/stats (+ the students-without-contract
  * counter) into display groups. Empty groups are dropped, so `length === 0` means
@@ -65,6 +78,25 @@ const VISIBLE = 3;
 export function buildAttentionGroups(attention, withoutContract, now = Date.now()) {
   const a = attention || {};
   const groups = [];
+
+  // Scans the college has not looked at yet: the signer is waiting for a decision, so this goes first.
+  const scans = a.scan_reviews || [];
+  if ((a.scan_reviews_total || scans.length) > 0) {
+    groups.push({
+      key: "scan_reviews",
+      icon: "scan",
+      title: "Сканы ждут проверки",
+      hint: "Подписант загрузил бумажный договор — откройте скан и примите или отклоните его",
+      total: a.scan_reviews_total || scans.length,
+      moreTo: "/contracts?stage=review_scan",
+      items: scans.slice(0, VISIBLE).map((x, i) => ({
+        key: `${x.request_id ?? x.contract_id}-${i}`,
+        to: `/contracts/${x.contract_id}?review=1`, // opens the scan right away
+        primary: `№ ${x.number} · ${x.student_name}`,
+        secondary: `${ROLE_LABELS[x.role] || x.role} загрузил(а) скан ${fmtWhen(x.uploaded_at)}`,
+      })),
+    });
+  }
 
   const expiring = a.links_expiring || [];
   if ((a.links_expiring_total || expiring.length) > 0) {

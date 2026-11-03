@@ -111,13 +111,16 @@ FIELDS: tuple[FieldDef, ...] = (
     FieldDef("legal_rep_iin", "ИИН законного представителя", "iin", max_len=20),
     FieldDef("legal_rep_phone", "Телефон законного представителя", "str", max_len=60),
     FieldDef("is_grant_student", "Грант (госзаказ)", "bool", hint="Да / Нет"),
+    FieldDef("sign_method", "Способ подписания", "signmode",
+             hint="ЭЦП (по умолчанию) или Скан — для тех, кто не может подписать электронно "
+                  "(например, живёт за пределами РК): подписывает на бумаге и загружает скан"),
     FieldDef("notes", "Примечание", "str"),
 )
 FIELD_BY_KEY = {f.key: f for f in FIELDS}
 
 # Pseudo-keys: columns that exist in real-world sheets but are not stored 1:1.
 _NAME_PARTS = ("last_name", "first_name", "middle_name")
-_IGNORED_KEYS = {"row_no", "qualification", "language"}
+_IGNORED_KEYS = {"row_no", "qualification", "language", "email"}
 
 # Fields an operator can set once for the whole upload ("practice settings of
 # the group"). Everything else only comes from the file.
@@ -158,6 +161,10 @@ def match_field(header: Any) -> str | None:
         return None
     if h in {"п п", "пп", "n", "no", "номер", "n п п", "номер п п", "порядковый номер", "id"}:
         return "row_no"
+    # «Электронный адрес (E-mail)» contains «адрес» — without this it would be read as the
+    # home address. Students' e-mails are not stored (often a school's or «123@mail.ru»).
+    if "mail" in h or "почт" in h or "электронн" in h:
+        return "email"
 
     rep = any(w in h for w in ("родител", "представител", "опекун"))
     padded = f" {h} "
@@ -227,6 +234,10 @@ def match_field(header: Any) -> str | None:
         return "partner_bin"
     if any(w in h for w in ("предприят", "организац", "партнер", "база практики", "место практики")):
         return "partner"
+    if "за пределами" in h or "за границ" in h or "за рубеж" in h or "проживает вне" in h:
+        return "abroad"
+    if "подписан" in h and ("способ" in h or "формат" in h or "вид" in h) or h in {"подписание", "способ подписи"}:
+        return "sign_method"
     if "грант" in h or "госзаказ" in h or "финансиров" in h:
         return "is_grant_student"
     if "примечан" in h or "комментар" in h or "заметк" in h:
@@ -237,6 +248,13 @@ def match_field(header: Any) -> str | None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Cell parsing
 # ─────────────────────────────────────────────────────────────────────────────
+
+_PLACEHOLDERS = {"-", "—", "–", "--", "нет", "н/д", "нет данных", "не указан", "не указано", "n/a", "x"}
+
+
+def _is_placeholder(text: str) -> bool:
+    return text.strip().casefold() in _PLACEHOLDERS
+
 
 def _is_blank(v: Any) -> bool:
     return v is None or (isinstance(v, str) and not v.strip())
@@ -314,6 +332,18 @@ def _parse_bool(v: Any) -> bool | None:
     if s in _FALSE_WORDS or s.startswith(("платн",)):
         return False
     raise ValueError(s)
+
+
+def _parse_signmode(v: Any) -> str | None:
+    """«ЭЦП» / «Скан» (also «бумага», «электронно») → ecp | scan; None when empty."""
+    if _is_blank(v):
+        return None
+    t = _text(v).casefold()
+    if any(w in t for w in ("скан", "бумаг", "scan", "paper", "рукопис")):
+        return "scan"
+    if any(w in t for w in ("эцп", "ecp", "электрон", "ncalayer", "egov")):
+        return "ecp"
+    raise ValueError(t)
 
 
 def normalize_name(value: str) -> str:
@@ -649,6 +679,7 @@ def _parse_sheet(name: str, grid: list[list[Any]], overrides: dict[str, str] | N
 _PSEUDO_LABELS = {
     "last_name": "Фамилия", "first_name": "Имя", "middle_name": "Отчество",
     "partner_bin": "БИН предприятия",
+    "abroad": "Проживает за пределами РК",
 }
 
 
@@ -909,7 +940,15 @@ def build_plan(book: ParsedBook, opts: ImportOptions) -> Plan:
             info["group_source"], info["suggested_group"] = "default", opts.default_group
         sheet_info.append(info)
 
-        sheet_fallback = info["suggested_group"] if info["group_source"] != "column" else ""
+        # Rows whose «Группа» cell is blank take the sheet's own group (override → title block →
+        # a meaningful sheet name → the default), whether or not the sheet has a group column.
+        sheet_fallback = (
+            info["suggested_group"]
+            or override
+            or sheet.title_group
+            or ("" if _GENERIC_SHEET.match(sheet.name.strip()) else normalize_group(sheet.name))
+            or opts.default_group
+        )
 
         for row_no, cells in sheet.rows:
             pr = PlanRow(row=row_no, sheet=sheet.name)
@@ -978,6 +1017,8 @@ def build_plan(book: ParsedBook, opts: ImportOptions) -> Plan:
                 if key in cells and not _is_blank(cells[key]):
                     fd = FIELD_BY_KEY[key]
                     text = _text(cells[key])
+                    if _is_placeholder(text):
+                        continue
                     if fd.max_len and len(text) > fd.max_len:
                         pr.warnings.append(f"«{fd.label}» обрезано до {fd.max_len} символов")
                         text = text[: fd.max_len]
@@ -1029,6 +1070,22 @@ def build_plan(book: ParsedBook, opts: ImportOptions) -> Plan:
                     flag = None
                 if flag:
                     vals["is_grant_student"] = True
+
+            # ── Способ подписания ───────────────────────────────────────────
+            if "sign_method" in cells and not _is_blank(cells["sign_method"]):
+                try:
+                    mode_ = _parse_signmode(cells["sign_method"])
+                except ValueError:
+                    pr.warnings.append(f"«Способ подписания»: не удалось распознать «{_text(cells['sign_method'])}» — нужно «ЭЦП» или «Скан»")
+                    mode_ = None
+                if mode_:
+                    vals["sign_method"] = mode_
+            elif "abroad" in cells and not _is_blank(cells["abroad"]):
+                try:
+                    if _parse_bool(cells["abroad"]):
+                        vals["sign_method"] = "scan"      # abroad → no ЭЦП → paper + scan
+                except ValueError:
+                    pr.warnings.append(f"«Проживает за пределами РК»: не удалось распознать «{_text(cells['abroad'])}»")
 
             # ── Предприятие ─────────────────────────────────────────────────
             partner_raw = _text(cells.get("partner"))
@@ -1153,6 +1210,12 @@ def _diff(student: Student, values: dict[str, Any], mode: str, pr: PlanRow) -> l
             if new and not old:
                 changes.append({"field": attr, "label": _label(attr), "old": False, "new": True})
             continue
+        if attr == "sign_method":
+            # «ecp» is the default everyone starts with, so «fill» cannot mean "only if empty": raise to
+            # «scan» always, lower back to «ecp» only when the operator asked to overwrite.
+            if new == "scan" and old != "scan" or (mode == "overwrite" and new == "ecp" and old == "scan"):
+                changes.append({"field": attr, "label": _label(attr), "old": old or "ecp", "new": new})
+            continue
         if _empty(new) or old == new:
             continue
         keep_existing = (
@@ -1273,6 +1336,7 @@ def build_template_workbook(*, partners: list[Partner], specialties: list[Specia
     if groups:
         _list_validation("group_name", f"'Справочники'!$C$2:$C${len(groups) + 1}", strict=False, title="Группа")
     _list_validation("is_grant_student", '"Да,Нет"', strict=True, title="Грант")
+    _list_validation("sign_method", '"ЭЦП,Скан"', strict=False, title="Способ подписания")
     _list_validation("form_of_study", '"очная,заочная,вечерняя"', strict=False, title="Форма обучения")
     _list_validation("practice_type", '"учебной,профессиональной,производственной,преддипломной"',
                      strict=False, title="Вид практики")
@@ -1336,6 +1400,8 @@ def build_students_workbook(students: list[Student], contract_info: dict[int, di
             v = getattr(s, f.student_attr, None)
             if f.kind == "bool":
                 v = "Да" if v else ""
+            elif f.kind == "signmode":
+                v = "Скан" if v == "scan" else "ЭЦП"
             elif isinstance(v, date):
                 v = v.strftime("%d.%m.%Y")
             row.append(v)

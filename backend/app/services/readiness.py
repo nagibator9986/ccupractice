@@ -11,7 +11,10 @@ explicitly passes ``allow_incomplete``.
 """
 from __future__ import annotations
 
+from datetime import date
+
 from ..models import CollegeSettings, Partner, Student
+from ..utils.signers import CAPACITY_REP, student_capacity
 
 # (scope, attribute, label)
 CRITICAL: tuple[tuple[str, str, str], ...] = (
@@ -44,11 +47,20 @@ def _blank(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-def check_readiness(student: Student | None, partner: Partner | None) -> dict:
+REPRESENTATIVE: tuple[tuple[str, str, str, str], ...] = (
+    ("student", "legal_rep_full_name", "ФИО законного представителя (студент младше 16 лет)", "critical"),
+    ("student", "legal_rep_iin", "ИИН законного представителя (студент младше 16 лет)", "critical"),
+    ("student", "legal_rep_phone", "Телефон законного представителя (для ссылки на подпись)", "recommended"),
+)
+
+
+def check_readiness(student: Student | None, partner: Partner | None, on_date: date | None = None) -> dict:
     """Return ``{ok, critical, recommended, missing: [...]}``.
 
     ``ok`` means no CRITICAL gap. Each missing entry carries the owning record
-    id so the SPA can deep-link to it.
+    id so the SPA can deep-link to it. ``on_date`` is the contract date: a student
+    under 16 on that day signs through a legal representative, whose name and ИИН
+    then become mandatory.
     """
     missing: list[dict] = []
 
@@ -64,6 +76,11 @@ def check_readiness(student: Student | None, partner: Partner | None) -> dict:
 
     _scan(CRITICAL, "critical")
     _scan(RECOMMENDED, "recommended")
+    if student is not None and student_capacity(student, on_date) == CAPACITY_REP:
+        for scope, attr, label, severity in REPRESENTATIVE:
+            if _blank(getattr(student, attr, None)):
+                missing.append({"scope": scope, "field": attr, "label": label,
+                                "severity": severity, "entity_id": student.id})
 
     settings = CollegeSettings.query.first()
     if settings is None or _blank(settings.director_full_name):

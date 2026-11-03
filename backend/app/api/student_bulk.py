@@ -358,6 +358,11 @@ def bulk_practice():
         v = clean_str(raw.get(key), max_len=limit)
         if v:
             updates[key] = v
+    if raw.get("sign_method") not in (None, ""):
+        method = str(raw.get("sign_method")).strip().lower()
+        if method not in ("ecp", "scan"):
+            return jsonify(error="Способ подписания: ecp или scan"), 400
+        updates["sign_method"] = method
     if not updates:
         return jsonify(error="Заполните хотя бы одно поле для назначения"), 400
     if updates.get("practice_start") and updates.get("practice_end") and updates["practice_end"] < updates["practice_start"]:
@@ -366,7 +371,8 @@ def bulk_practice():
     changed, skipped = 0, []
     for s in students:
         if only_empty:
-            payload = {k: v for k, v in updates.items() if getattr(s, k) in (None, "")}
+            # sign_method always carries a value («ecp» by default) — «only empty» must not block it
+            payload = {k: v for k, v in updates.items() if k == "sign_method" or getattr(s, k) in (None, "")}
         else:
             payload = dict(updates)
         eff_start = payload.get("practice_start", s.practice_start)

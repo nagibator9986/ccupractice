@@ -50,10 +50,28 @@ def _serial_tail(serial: str | None) -> str:
     return serial[-12:].upper()
 
 
+def _signer_label(sig) -> str:
+    from ..utils.signers import role_label
+
+    return role_label(sig.signer_role, getattr(sig, "signer_capacity", None) or "self")
+
+
+def _scan_hash(sig) -> str | None:
+    """Current SHA-256 of the paper scan that backs a ``scan`` signature."""
+    from ..models import SigningRequest
+
+    req = SigningRequest.query.filter_by(signature_id=sig.id).first()
+    if not req or not req.scan_path:
+        return None
+    p = Path(current_app.config["UPLOAD_FOLDER"]) / req.scan_path
+    return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+
+
 def _signature_dto(sig) -> dict:
     return {
         "signer_role": sig.signer_role,
-        "signer_role_label": _ROLE_LABELS.get(sig.signer_role, sig.signer_role),
+        "signer_role_label": _signer_label(sig),
+        "signer_capacity": getattr(sig, "signer_capacity", None) or "self",
         "signer_full_name": sig.signer_full_name or "—",
         "signer_iin_or_bin_masked": _mask_iin(sig.signer_iin_or_bin),
         "signer_serial_tail": _serial_tail(sig.signer_serial),
@@ -365,6 +383,17 @@ def public_verify(code: str):
         by_format.setdefault(getattr(s_, "payload_format", None) or "docx", []).append(s_)
     checks = []
     for fmt, group in by_format.items():
+        if fmt == "scan":
+            # Each paper signature is backed by its own scan file.
+            pairs = [(g.signed_payload_sha256, _scan_hash(g)) for g in group]
+            checks.append({
+                "format": fmt,
+                "signed_payload_sha256": pairs[0][0],
+                "current_file_sha256": pairs[0][1],
+                "match": all(cur is not None and cur == sg for sg, cur in pairs),
+                "available": all(cur is not None for _, cur in pairs),
+            })
+            continue
         signed = {g.signed_payload_sha256 for g in group}
         cur = current_hashes.get(fmt)
         checks.append({

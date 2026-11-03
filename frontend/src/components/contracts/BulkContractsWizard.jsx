@@ -635,7 +635,7 @@ export default function BulkContractsWizard({ open, onClose, onDone, studentIds,
                     checked={form.sendLinks}
                     onChange={(v) => setF({ sendLinks: v })}
                     text="Сразу подготовить ссылки на подпись предприятию и студенту"
-                    hint="Ссылки создаются автоматически, но рассылаете их вы (WhatsApp, почта) или скачиваете Excel."
+                    hint="Ссылки создаются автоматически, но рассылаете их вы (WhatsApp, почта) или скачиваете Excel. Студентам с отметкой «Скан» ссылка откроет загрузку скана, а студентам младше 16 лет она адресована законному представителю."
                   />
                   <CheckboxField
                     label="Неполные данные"

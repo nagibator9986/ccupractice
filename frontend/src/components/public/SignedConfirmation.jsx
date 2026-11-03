@@ -1,14 +1,28 @@
-import { CircleCheck, Download } from "lucide-react";
+import { CircleCheck, Download, ExternalLink } from "lucide-react";
 import { signingApi } from "../../api/endpoints.js";
 import { formatDate, formatDateTime } from "../../utils/format.js";
 import { stepLabel } from "./SigningProgress.jsx";
+import { utcIso } from "./scanUtils.js";
 
 /**
  * Large success state shown instead of the "ready to sign" banner once this
- * signer's ЭЦП is stored. `waitingRoles` = parties that have not signed yet.
+ * signer's signature is stored. `waitingRoles` = parties that have not signed yet.
+ * `method="scan"`: the signature is a paper one that the college has accepted.
  */
-export default function SignedConfirmation({ token, signedAt, waitingRoles = [], hasPdf, hasDocx, expiresAt }) {
+export default function SignedConfirmation({
+  token,
+  signedAt,
+  waitingRoles = [],
+  hasPdf,
+  hasDocx,
+  expiresAt,
+  method = "ecp",
+  hasScan = false,
+  signingState,
+}) {
   const everyoneSigned = waitingRoles.length === 0;
+  const paper = method === "scan";
+  const when = signedAt ? formatDateTime(utcIso(signedAt)) : "";
   return (
     <section className="card mb-4 sm:mb-5 p-5 sm:p-7 ring-1 ring-emerald-200" role="status" aria-label="Договор подписан">
       <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
@@ -17,9 +31,15 @@ export default function SignedConfirmation({ token, signedAt, waitingRoles = [],
             <CircleCheck className="h-8 w-8" />
           </span>
           <div className="min-w-0">
-            <h2 className="font-serif text-2xl font-bold leading-tight text-charcoal-900">Договор подписан с вашей стороны</h2>
+            <h2 className="font-serif text-2xl font-bold leading-tight text-charcoal-900">
+              {paper ? "Скан принят колледжем — договор подписан с вашей стороны" : "Договор подписан с вашей стороны"}
+            </h2>
             <p className="mt-1 text-sm text-charcoal-600">
-              {signedAt ? <>Подпись сохранена {formatDateTime(signedAt)}. </> : "Подпись сохранена. "}
+              {paper ? (
+                <>{when ? <>Колледж принял скан {when}. </> : "Колледж принял скан. "}</>
+              ) : (
+                <>{when ? <>Подпись сохранена {when}. </> : "Подпись сохранена. "}</>
+              )}
               Спасибо — больше ничего делать не нужно.
             </p>
             <div className="mt-3 rounded-xl bg-charcoal-50 px-3.5 py-3 text-sm text-charcoal-700">
@@ -27,7 +47,7 @@ export default function SignedConfirmation({ token, signedAt, waitingRoles = [],
               <p className="mt-0.5">
                 {everyoneSigned
                   ? "Все три стороны подписали договор. Колледж оформит итоговый комплект документов."
-                  : `Остальные стороны подписывают независимо от вас. Ожидаем: ${waitingRoles.map(stepLabel).join(", ")}. Колледж свяжется с вами, если потребуется.`}
+                  : `Остальные стороны подписывают независимо от вас. Ожидаем: ${waitingRoles.map((r) => stepLabel(r, signingState)).join(", ")}. Колледж свяжется с вами, если потребуется.`}
               </p>
             </div>
           </div>
@@ -44,6 +64,12 @@ export default function SignedConfirmation({ token, signedAt, waitingRoles = [],
             <a className="btn-secondary" href={signingApi.publicDownloadUrl(token, "docx")} download>
               <Download className="h-4 w-4" aria-hidden="true" />
               Скачать DOCX
+            </a>
+          )}
+          {paper && hasScan && (
+            <a className="btn-secondary" href={signingApi.publicScanFileUrl(token)} target="_blank" rel="noreferrer">
+              <ExternalLink className="h-4 w-4" aria-hidden="true" />
+              Посмотреть ваш скан
             </a>
           )}
         </div>

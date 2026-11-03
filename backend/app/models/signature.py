@@ -34,6 +34,8 @@ class Signature(db.Model):
     # verification page compares each signature with the CURRENT file of ITS format.
     payload_format = db.Column(db.String(10), nullable=False, default="docx", server_default="docx")
     channel = db.Column(db.String(20), nullable=False, default="ncalayer", server_default="ncalayer")
+    # «self» or «legal_representative» (a student under 16 is represented by a parent).
+    signer_capacity = db.Column(db.String(20), nullable=False, default="self", server_default="self")
 
     created_at = db.Column(db.DateTime, default=utc_now)
 
@@ -49,5 +51,6 @@ class Signature(db.Model):
             "verification_level": self.verification_level or "full",
             "payload_format": self.payload_format or "docx",
             "channel": self.channel or "ncalayer",
+            "signer_capacity": self.signer_capacity or "self",
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

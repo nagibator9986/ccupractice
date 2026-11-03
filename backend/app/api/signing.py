@@ -36,6 +36,7 @@ from ..services.signature_service import SignatureError, payload_sha256
 from ..services.signature_verification import verify_cms_signature
 from ..utils.auth import admin_required
 from ..utils.serializers import get_json_safe
+from ..utils.signers import BASE_ROLE_LABELS, CAPACITY_REP, CAPACITY_SELF, role_label, student_capacity
 from ..utils.time import utc_now
 
 bp = Blueprint("signing", __name__)
@@ -45,11 +46,8 @@ def _public_base() -> str:
     return request.headers.get("X-Public-Origin") or request.host_url.rstrip("/")
 
 
-ROLE_LABELS = {
-    "college": "Колледж (организация образования)",
-    "partner": "Предприятие",
-    "student": "Обучающийся",
-}
+ROLE_LABELS = BASE_ROLE_LABELS
+SIGN_METHODS = ("ecp", "scan")
 ALLOWED_ROLES = ("college", "partner", "student")
 
 
@@ -69,7 +67,12 @@ def _recipient_phone(contract: Contract, role: str) -> str:
     """Phone to reach a signer on WhatsApp/SMS. Derived from the registers, never
     stored on the request, so it can't drift from the student/partner card."""
     if role == "student":
-        return (contract.student.phone if contract.student else "") or ""
+        st = contract.student
+        if st is None:
+            return ""
+        if student_capacity(st, contract.contract_date) == CAPACITY_REP and st.legal_rep_phone:
+            return st.legal_rep_phone
+        return st.phone or ""
     if role == "partner":
         return (contract.partner.phone if contract.partner else "") or ""
     settings = CollegeSettings.query.first()
@@ -82,7 +85,15 @@ def _request_payload(sr: SigningRequest, base: str) -> dict:
     return data
 
 
-def _issue_links(contract: Contract, roles: list, custom: dict, force: bool) -> list[SigningRequest]:
+def _default_method(contract: Contract, role: str) -> str:
+    """Per-student choice (set once on the student card / in the roster); the others sign with ЭЦП."""
+    if role == "student" and contract.student and (contract.student.sign_method or "ecp") == "scan":
+        return "scan"
+    return "ecp"
+
+
+def _issue_links(contract: Contract, roles: list, custom: dict, force: bool,
+                 methods: dict | None = None) -> list[SigningRequest]:
     """Create signing links for ``roles`` (idempotent without ``force``).
 
     Without force a role that is already signed or holds a live link is skipped,
@@ -130,7 +141,13 @@ def _issue_links(contract: Contract, roles: list, custom: dict, force: bool) -> 
                     contract.status = ContractStatus.SENT
 
         recipient = {**defaults.get(role, {}), **(custom.get(role) or {})}
-        sr = SigningRequest.create_for(cid, role, recipient)
+        method = (methods or {}).get(role) or _default_method(contract, role)
+        if method not in SIGN_METHODS:
+            method = "ecp"
+        capacity = (
+            student_capacity(contract.student, contract.contract_date) if role == "student" else CAPACITY_SELF
+        )
+        sr = SigningRequest.create_for(cid, role, recipient, method=method, capacity=capacity)
         db.session.add(sr)
         created.append(sr)
 
@@ -155,7 +172,8 @@ def invite(cid: int):
         return jsonify(error="Поле roles должно быть массивом"), 400
 
     created = _issue_links(
-        contract, requested_roles, data.get("recipients") or {}, bool(data.get("force"))
+        contract, requested_roles, data.get("recipients") or {}, bool(data.get("force")),
+        methods=data.get("methods") if isinstance(data.get("methods"), dict) else None,
     )
     db.session.commit()
     base = _public_base()
@@ -199,7 +217,8 @@ def bulk_invite():
             entry.update(status="skipped", reason="Договор не сформирован")
             results.append(entry)
             continue
-        created = _issue_links(c, roles, {}, False)
+        created = _issue_links(c, roles, {}, False,
+                               methods=data.get("methods") if isinstance(data.get("methods"), dict) else None)
         db.session.flush()
         new_ids = {sr.id for sr in created}
         live = SigningRequest.query.filter(
@@ -249,17 +268,23 @@ def links_export():
         c = sr.contract
         url = f"{base.rstrip('/')}/sign/{sr.token}"
         name = sr.recipient_name or ""
-        message = (
-            f"Здравствуйте, {name}! Просим подписать договор практики № {c.number} "
-            f"(студент: {c.student.full_name}) электронной подписью (ЭЦП, NCALayer). "
-            f"Ссылка: {url} Срок действия — до {sr.expires_at:%d.%m.%Y}."
-            if sr.expires_at else
-            f"Здравствуйте, {name}! Просим подписать договор практики № {c.number}: {url}"
-        )
+        until = f" Срок действия — до {sr.expires_at:%d.%m.%Y}." if sr.expires_at else ""
+        if (sr.method or "ecp") == "scan":
+            message = (
+                f"Здравствуйте, {name}! Договор практики № {c.number} (студент: {c.student.full_name}) нужно "
+                f"подписать на бумаге. По ссылке скачайте договор, распечатайте, поставьте подпись и загрузите "
+                f"скан или фото на той же странице: {url}{until}"
+            )
+        else:
+            message = (
+                f"Здравствуйте, {name}! Просим подписать договор практики № {c.number} "
+                f"(студент: {c.student.full_name}) электронной подписью (ЭЦП): {url}{until}"
+            )
         rows.append([
-            c.number, c.student.full_name, c.student.group_name or "", ROLE_LABELS.get(sr.signer_role, sr.signer_role),
+            c.number, c.student.full_name, c.student.group_name or "", role_label(sr.signer_role, sr.signer_capacity),
             name, _recipient_phone(c, sr.signer_role), sr.recipient_email or "", url,
             sr.expires_at, "Просмотрено" if sr.status == "viewed" else "Ожидает подписи", message,
+            "Скан (бумага)" if (sr.method or "ecp") == "scan" else "ЭЦП",
         ])
     if not rows:
         return jsonify(error="Нет активных ссылок для выбранных договоров. Сначала отправьте договоры на подпись."), 404
@@ -269,8 +294,8 @@ def links_export():
     table_sheet(
         ws,
         ["№ договора", "Студент", "Группа", "Кто подписывает", "Получатель", "Телефон", "Email",
-         "Ссылка на подписание", "Действует до", "Статус", "Текст сообщения"],
-        rows, required=[True] * 11, text_columns=(6,),
+         "Ссылка на подписание", "Действует до", "Статус", "Текст сообщения", "Способ подписания"],
+        rows, required=[True] * 12, text_columns=(6,),
     )
     for cell in ws["I"][1:]:
         cell.number_format = "DD.MM.YYYY"
@@ -439,13 +464,26 @@ def public_view(token: str):
             "status": r.status,
             "signed_at": r.signed_at.isoformat() if r.signed_at else None,
             "recipient_name": r.recipient_name,
+            "label": role_label(r.signer_role, r.signer_capacity),
+            "method": r.method or "ecp",
+            "scan_review": r.scan_review if r.status != "signed" else None,
         }
 
     return jsonify(
         request={
             "id": sr.id,
             "signer_role": sr.signer_role,
-            "signer_role_label": ROLE_LABELS[sr.signer_role],
+            "signer_role_label": role_label(sr.signer_role, sr.signer_capacity),
+            "signer_capacity": sr.signer_capacity or CAPACITY_SELF,
+            "method": sr.method or "ecp",
+            # What the signer needs to see about their own paper scan (never the file itself here).
+            "scan": {
+                "uploaded_at": (sr.scan_uploaded_at.isoformat() + "Z") if sr.scan_uploaded_at else None,
+                "name": sr.scan_name,
+                "review": sr.scan_review,
+                "review_note": sr.scan_review_note if sr.scan_review == "rejected" else None,
+                "has_file": bool(sr.scan_path),
+            },
             "recipient_name": sr.recipient_name,
             # The raw recipient_iin_or_bin is intentionally NOT returned — public
             # token surfaces land in email/SMS history, Referer headers and
@@ -457,7 +495,7 @@ def public_view(token: str):
         },
         contract=_public_contract_payload(contract),
         signing_state=summary,
-        signing_methods=_signing_methods(contract),
+        signing_methods=_signing_methods(contract, sr),
         download={
             "docx": f"/api/signing/public/{token}/download/docx" if contract.docx_path else None,
             "pdf": f"/api/signing/public/{token}/download/pdf" if contract.pdf_path else None,
@@ -466,7 +504,7 @@ def public_view(token: str):
     )
 
 
-def _signing_methods(contract: Contract) -> dict:
+def _signing_methods(contract: Contract, sr: SigningRequest | None = None) -> dict:
     """Which ways this signer may sign. eGov mobile needs the feature switched on
     (EGOV_SIGN_ENABLED — the college's domain must be registered with eGov first)
     and a PDF of the contract, because that is what the phone displays."""
@@ -476,13 +514,17 @@ def _signing_methods(contract: Contract) -> dict:
         Path(current_app.config["ARCHIVE_FOLDER"]) / contract.pdf_path
     ).is_file()
     enabled = is_enabled()
+    scan_only = bool(sr is not None and (sr.method or "ecp") == "scan")
     return {
-        "ncalayer": True,
+        # A link issued for «signing on paper» accepts a scan only — never an ЭЦП, so the
+        # party cannot bypass the college's choice (and the review that goes with it).
+        "ncalayer": not scan_only,
         "egov_mobile": {
             "enabled": enabled,
-            "available": enabled and pdf_ok,
-            "reason": None if (not enabled or pdf_ok) else "pdf_missing",
+            "available": enabled and pdf_ok and not scan_only,
+            "reason": "scan_only" if scan_only else (None if (not enabled or pdf_ok) else "pdf_missing"),
         },
+        "scan": scan_only,
     }
 
 
@@ -516,6 +558,8 @@ def public_payload(token: str):
         return jsonify(error="Ссылка отозвана", code="revoked"), 410
     if sr.status == "signed":
         return jsonify(error="Документ уже подписан", code="signed"), 409
+    if (sr.method or "ecp") == "scan":
+        return jsonify(error="Для этой ссылки предусмотрено подписание на бумаге со сканом.", code="scan_only"), 409
     contract = sr.contract
     if not contract.docx_path:
         return jsonify(error="Файл договора отсутствует"), 404
@@ -574,6 +618,8 @@ def public_submit(token: str):
         return jsonify(error="Ссылка отозвана", code="revoked"), 410
     if sr.status == "signed":
         return jsonify(error="Документ уже подписан по этой ссылке"), 409
+    if (sr.method or "ecp") == "scan":
+        return jsonify(error="Для этой ссылки предусмотрено подписание на бумаге со сканом.", code="scan_only"), 409
 
     data = get_json_safe()
     cms_b64 = (data.get("cms") or "").strip()
@@ -667,7 +713,20 @@ def record_public_signature(
         verification_level=parsed.verification_level,
         payload_format=payload_format,
         channel=channel,
+        signer_capacity=sr.signer_capacity or CAPACITY_SELF,
     )
+    all_signed = persist_signature(sr, contract, sig)
+    warnings = list(parsed.warnings) + (
+        [f"ИИН/БИН подписанта ({actual}) не совпал с ожидаемым ({expected})"]
+        if identity_mismatch else []
+    )
+    return SignRecord(sig, all_signed, warnings)
+
+
+def persist_signature(sr: SigningRequest, contract: Contract, sig: Signature) -> bool:
+    """Store a Signature (already verified, or accepted by the college for a paper scan), close the
+    signing request and flip the contract to SIGNED once every party has signed. Returns whether
+    all three have. Raises ``SignConflict`` if the role was signed concurrently."""
     db.session.add(sig)
     try:
         db.session.flush()
@@ -712,12 +771,44 @@ def record_public_signature(
             db.session.commit()
         except (IntegrityError, OperationalError):
             db.session.rollback()
+    return all_signed
 
-    warnings = list(parsed.warnings) + (
-        [f"ИИН/БИН подписанта ({actual}) не совпал с ожидаемым ({expected})"]
-        if identity_mismatch else []
+
+def record_scan_signature(sr: SigningRequest, contract: Contract) -> Signature:
+    """The college ACCEPTED the paper scan of this party: that scan becomes the party's signature.
+
+    There is no certificate: the evidence is the scan itself (its SHA-256 is recorded and checked on
+    the public verification page) plus the college's acceptance."""
+    sig = Signature(
+        contract_id=contract.id,
+        signer_role=sr.signer_role,
+        signer_full_name=sr.recipient_name,
+        signer_iin_or_bin=sr.recipient_iin_or_bin,
+        signer_serial=None,
+        cms_signature="",
+        signed_payload_sha256=sr.scan_sha256 or "",
+        verification_level="scan",
+        payload_format="scan",
+        channel="scan",
+        signer_capacity=sr.signer_capacity or CAPACITY_SELF,
     )
-    return SignRecord(sig, all_signed, warnings)
+    persist_signature(sr, contract, sig)
+    return sig
+
+
+def _student_recipient(contract: Contract) -> dict:
+    """The student — or, below 16, the parent who signs for them (their name and ИИН are what
+    the link is addressed to and what the signer's certificate is compared with)."""
+    student = contract.student
+    if student is None:
+        return {"name": "", "email": "", "iin_or_bin": ""}
+    if student_capacity(student, contract.contract_date) == CAPACITY_REP:
+        return {
+            "name": student.legal_rep_full_name or "",
+            "email": "",
+            "iin_or_bin": student.legal_rep_iin or "",
+        }
+    return {"name": student.full_name, "email": "", "iin_or_bin": student.iin or ""}
 
 
 def _default_recipients(contract: Contract) -> dict:
@@ -735,9 +826,5 @@ def _default_recipients(contract: Contract) -> dict:
             "email": (partner.email if partner else "") or "",
             "iin_or_bin": (partner.bin if partner else "") or "",
         },
-        "student": {
-            "name": student.full_name if student else "",
-            "email": "",
-            "iin_or_bin": (student.iin if student else "") or "",
-        },
+        "student": _student_recipient(contract),
     }

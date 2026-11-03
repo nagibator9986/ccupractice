@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { Link } from "react-router-dom";
-import { CircleCheck, FilePlus2, Link2, Loader2, Send } from "lucide-react";
+import { CircleCheck, FilePlus2, FileSearch, Link2, Loader2, Send, UserRound } from "lucide-react";
 import StatusBadge from "../StatusBadge.jsx";
 import { formatDate } from "../../utils/format.js";
 import SignatureDots from "./SignatureDots.jsx";
@@ -10,12 +10,14 @@ import NextActionChip from "./NextActionChip.jsx";
 const QUICK = {
   generate: { label: "Сформировать", icon: FilePlus2, cls: "btn-primary" },
   invite: { label: "Создать ссылки", icon: Send, cls: "btn-primary" },
+  // Not an API call: the review happens on the contract page (opens the scan right away).
+  review_scan: { label: "Проверить скан", icon: FileSearch, cls: "btn-primary", href: (c) => `/contracts/${c.id}?review=1` },
   await_signatures: { label: "Ссылки", icon: Link2, cls: "btn-secondary" },
   complete: { label: "Завершить", icon: CircleCheck, cls: "btn-success" },
 };
 
 // In the card the chip would repeat the button text — show it only when it adds something.
-const CHIP_REPEATS_BUTTON = new Set(["generate", "invite", "complete"]);
+const CHIP_REPEATS_BUTTON = new Set(["generate", "invite", "review_scan", "complete"]);
 
 export function periodText(c) {
   if (!c.practice_start && !c.practice_end) return "—";
@@ -26,6 +28,14 @@ function QuickButton({ c, isAdmin, busy, onQuick, className = "", small = true }
   const q = isAdmin ? QUICK[c.next_action] : null;
   if (!q) return null;
   const Icon = busy ? Loader2 : q.icon;
+  if (q.href) {
+    return (
+      <Link to={q.href(c)} className={`${q.cls} ${small ? "btn-sm" : ""} whitespace-nowrap ${className}`}>
+        <Icon className="h-4 w-4" aria-hidden="true" />
+        {q.label}
+      </Link>
+    );
+  }
   return (
     <button
       type="button"
@@ -37,6 +47,29 @@ function QuickButton({ c, isAdmin, busy, onQuick, className = "", small = true }
       <Icon className={busy ? "h-4 w-4 animate-spin" : "h-4 w-4"} aria-hidden="true" />
       {q.label}
     </button>
+  );
+}
+
+// What the list knows about paper / representative signing of a contract.
+function dotsProps(c) {
+  return {
+    signedRoles: c.signed_roles,
+    invitedRoles: c.invited_roles,
+    studentMethod: c.student_sign_method,
+    paperRoles: c.paper_roles,
+    studentSigner: c.student_signer,
+    scansToReview: c.scans_to_review,
+  };
+}
+
+/** «Подписывает представитель» — a small note for a student under 16. */
+function RepNote({ c }) {
+  if (c.student_signer !== "legal_representative") return null;
+  return (
+    <div className="mt-0.5 inline-flex items-center gap-1 rounded-md bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-100" title="Студент младше 16 лет — договор подписывает законный представитель">
+      <UserRound className="h-3 w-3" aria-hidden="true" />
+      подписывает представитель
+    </div>
   );
 }
 
@@ -72,6 +105,7 @@ export const ContractRow = memo(function ContractRow({ c, selected, onToggle, is
           {c.student_name}
         </Link>
         <div className="text-xs text-charcoal-500">{c.student_group || "без группы"}</div>
+        <RepNote c={c} />
       </td>
       <td className="min-w-[8rem] max-w-[12rem]">{c.partner_name}</td>
       <td className="hidden whitespace-nowrap text-xs text-charcoal-600 2xl:table-cell">{periodText(c)}</td>
@@ -79,7 +113,7 @@ export const ContractRow = memo(function ContractRow({ c, selected, onToggle, is
         <StatusBadge value={c.status} />
       </td>
       <td>
-        <SignatureDots signedRoles={c.signed_roles} invitedRoles={c.invited_roles} />
+        <SignatureDots {...dotsProps(c)} />
       </td>
       <td>
         <NextActionChip action={c.next_action} />
@@ -114,10 +148,11 @@ export const ContractCard = memo(function ContractCard({ c, selected, onToggle, 
             {c.student_name}
           </Link>
           <div className="text-xs text-charcoal-500">{c.student_group || "без группы"}</div>
+          <RepNote c={c} />
           <div className="mt-1 text-sm text-charcoal-700">{c.partner_name}</div>
           <div className="text-xs text-charcoal-500">Практика: {periodText(c)}</div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-            <SignatureDots signedRoles={c.signed_roles} invitedRoles={c.invited_roles} />
+            <SignatureDots {...dotsProps(c)} />
             {showChip && <NextActionChip action={c.next_action} />}
           </div>
           <div className="mt-3 flex gap-2">

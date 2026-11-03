@@ -13,11 +13,60 @@ export const ROLE_TITLE = {
 // One letter per party for the compact К·П·С indicator in the lists.
 export const ROLE_SHORT = { college: "К", partner: "П", student: "С" };
 
+// Who actually signs the student's side: the student, or (under 16) the legal representative.
+export const CAPACITY_REP = "legal_representative";
+export const REP_TITLE = "Законный представитель";
+export const REP_REASON = "студент младше 16 лет";
+
+/** Title of a party; the student's row becomes «Законный представитель» for a minor. */
+export function partyTitle(role, capacity) {
+  if (role === "student" && capacity === CAPACITY_REP) return REP_TITLE;
+  return ROLE_TITLE[role] || role;
+}
+
+// How a party signs: ЭЦП (NCALayer / eGov mobile) or on paper with a scan the college reviews.
+export const SIGN_METHODS = ["ecp", "scan"];
+export const SIGN_METHOD_META = {
+  ecp: { label: "ЭЦП", long: "Электронная подпись (ЭЦП)", tone: "indigo" },
+  scan: { label: "Бумага + скан", long: "На бумаге, со сканом", tone: "teal" },
+};
+
 export const ROLE_HINT = {
   college: "Директор колледжа подписывает ЭЦП от имени организации образования",
   partner: "Руководитель предприятия подписывает ЭЦП от имени базы практики",
   student: "Студент подписывает ЭЦП от своего имени",
 };
+
+/** One-line explanation under the party's name. */
+export function roleHint(role, capacity = "self", method = "ecp") {
+  const paper = method === "scan";
+  if (role === "college") return ROLE_HINT.college;
+  if (role === "partner") {
+    return paper
+      ? "Руководитель предприятия подписывает договор на бумаге и загружает скан"
+      : ROLE_HINT.partner;
+  }
+  if (capacity === CAPACITY_REP) {
+    return paper
+      ? "Подписывает на бумаге и загружает скан — вместо студента"
+      : "Подписывает ЭЦП вместо студента";
+  }
+  return paper ? "Студент подписывает договор на бумаге и загружает скан" : ROLE_HINT.student;
+}
+
+/** Capacity of the student's side for one row: the live link wins, then the signature, then the contract. */
+export function capacityOf({ role, req, signature, contract }) {
+  if (role !== "student") return "self";
+  return req?.signer_capacity || signature?.signer_capacity || contract?.student_signer || "self";
+}
+
+/** Method of one row: what was used (signature) > the live link > the default of the student card. */
+export function methodOf({ role, req, signature, contract }) {
+  if (signature) return signature.channel === "scan" ? "scan" : "ecp";
+  if (req) return req.method === "scan" ? "scan" : "ecp";
+  if (role === "student" && contract?.student_sign_method === "scan") return "scan";
+  return "ecp";
+}
 
 export const SCOPE_TITLE = {
   student: "Студент",
@@ -30,13 +79,14 @@ export const SCOPE_TITLE = {
 export const NEXT_ACTION_META = {
   generate: { label: "Сформировать", tone: "amber" },
   invite: { label: "Отправить на подпись", tone: "blue" },
+  review_scan: { label: "Проверить скан", tone: "teal" },
   await_signatures: { label: "Ждём подписи", tone: "indigo" },
   complete: { label: "Завершить", tone: "emerald" },
   done: { label: "Готово", tone: "green" },
 };
 
 // The values the "Что делать дальше" filter offers (done has its own status tab).
-export const STAGE_OPTIONS = ["generate", "invite", "await_signatures", "complete"];
+export const STAGE_OPTIONS = ["generate", "invite", "review_scan", "await_signatures", "complete"];
 
 // Mirror of `_ALLOWED_STATUS_TRANSITIONS` in backend/app/api/contracts.py.
 // `signed` is never a manual target: the signing flow owns it. Keep in sync
@@ -65,7 +115,11 @@ export function readinessLink(m) {
   if (!m) return null;
   if (m.scope === "college") return "/settings";
   if (!m.entity_id) return null;
-  if (m.scope === "student") return `/students?edit=${m.entity_id}`;
+  if (m.scope === "student") {
+    // The representative's fields sit on their own tab of the student card.
+    const rep = typeof m.field === "string" && m.field.startsWith("legal_rep_");
+    return `/students?edit=${m.entity_id}${rep ? "&tab=rep" : ""}`;
+  }
   if (m.scope === "partner") return `/partners?edit=${m.entity_id}`;
   return null;
 }
@@ -112,16 +166,25 @@ export function daysLeft(value) {
   return Math.ceil((d.getTime() - Date.now()) / 86_400_000);
 }
 
+/** Is there a scan of this link that waits for the college's decision? */
+export function hasPendingScan(req) {
+  return !!req && req.scan?.review === "pending" && (req.status === "pending" || req.status === "viewed");
+}
+
 /**
  * State of one party's signing link:
- * none | pending | viewed | expired | signed.  A revoked link counts as none.
+ * none | pending | viewed | expired | signed | scan_wait | scan_pending | scan_rejected.
+ * A revoked link counts as none. A scan that waits for review beats "expired": the
+ * college can still accept it, the signer's link is irrelevant at that point.
  */
 export function requestState(req) {
   if (!req) return "none";
   if (req.status === "signed") return "signed";
   if (req.status === "revoked") return "none";
+  if (hasPendingScan(req)) return "scan_pending";
   const left = daysLeft(req.expires_at);
   if (req.expired || (left != null && left < 0)) return "expired";
+  if (req.method === "scan") return req.scan?.review === "rejected" ? "scan_rejected" : "scan_wait";
   return req.status === "viewed" ? "viewed" : "pending";
 }
 
@@ -131,7 +194,29 @@ export const REQUEST_STATE_META = {
   viewed: { label: "Открыл(а) ссылку", tone: "indigo" },
   expired: { label: "Срок ссылки истёк", tone: "red" },
   signed: { label: "Подписано", tone: "emerald" },
+  scan_wait: { label: "Ждём скан", tone: "amber" },
+  scan_pending: { label: "Скан на проверке", tone: "blue" },
+  scan_rejected: { label: "Скан отклонён", tone: "red" },
 };
+
+// Scan limits of the signer's page (server: scan_store.py) — checked here before an admin upload.
+export const SCAN_MAX_FILES = 10;
+export const SCAN_MAX_MB = 15;
+
+/** Client-side check of files picked for a scan. "" = fine, otherwise a user-ready message. */
+export function validateScanFiles(files) {
+  const list = Array.from(files || []);
+  if (list.length === 0) return "Выберите файл со сканом";
+  const isPdf = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+  const isImg = (f) => /^image\/(jpe?g|png)$/i.test(f.type) || /\.(jpe?g|png)$/i.test(f.name);
+  const wrong = list.find((f) => !isPdf(f) && !isImg(f));
+  if (wrong) return `Файл «${wrong.name}» не подходит: нужен PDF или фото в формате JPG/PNG`;
+  const big = list.find((f) => f.size > SCAN_MAX_MB * 1024 * 1024);
+  if (big) return `Файл «${big.name}» больше ${SCAN_MAX_MB} МБ`;
+  if (list.some(isPdf) && list.length > 1) return "Загрузите один PDF-файл или несколько фото — вместе их смешивать нельзя";
+  if (list.length > SCAN_MAX_FILES) return `Не больше ${SCAN_MAX_FILES} фото за один раз`;
+  return "";
+}
 
 /** Short phrase about the expiry, e.g. "до 25.11.2026 (через 12 дн.)". */
 export function expiryText(req) {
@@ -152,14 +237,44 @@ export function signUrlOf(req) {
   return req.sign_url || "";
 }
 
+// Pieces of the message that goes with a link; kept apart so Telegram can take the link
+// separately from the text.
+function messageParts({ name, number, studentName, expiresAt, method = "ecp", capacity = "self" }) {
+  const hello = name ? `Здравствуйте, ${name}!` : "Здравствуйте!";
+  const rep = capacity === CAPACITY_REP;
+  const until = expiresAt ? ` Срок действия — до ${fmtDate(expiresAt)}.` : "";
+  let intro;
+  let lead;
+  if (method === "scan") {
+    intro = rep
+      ? `${hello} Студент${studentName ? ` ${studentName}` : ""} младше 16 лет, поэтому договор практики № ${number} подписывает законный представитель — на бумаге.`
+      : `${hello} Договор практики № ${number}${studentName ? ` (студент: ${studentName})` : ""} нужно подписать на бумаге.`;
+    lead = "Распечатайте, подпишите и загрузите скан или фото по ссылке:";
+  } else {
+    intro = rep
+      ? `${hello} Просим подписать как законный представитель договор практики № ${number}${studentName ? ` студента ${studentName}` : ""} электронной подписью (ЭЦП) через NCALayer.`
+      : `${hello} Просим подписать договор практики № ${number}${studentName ? ` (студент: ${studentName})` : ""} электронной подписью (ЭЦП) через NCALayer.`;
+    lead = "Ссылка:";
+  }
+  return { intro, lead, until };
+}
+
 /**
  * Text that accompanies a signing link. Mirrors the message in the Excel
  * export of the backend (api/signing.py::links_export). Nothing is sent
  * automatically — the clerk pastes it into a messenger.
+ * `method` = "ecp" | "scan", `capacity` = "self" | "legal_representative" (both from the link).
  */
-export function buildSignMessage({ name, number, studentName, url, expiresAt }) {
-  const hello = name ? `Здравствуйте, ${name}!` : "Здравствуйте!";
-  const who = studentName ? ` (студент: ${studentName})` : "";
-  const until = expiresAt ? ` Срок действия — до ${fmtDate(expiresAt)}.` : "";
-  return `${hello} Просим подписать договор практики № ${number}${who} электронной подписью (ЭЦП) через NCALayer. Ссылка: ${url}${until}`;
+export function buildSignMessage({ url, ...rest }) {
+  const { intro, lead, until } = messageParts(rest);
+  return `${intro} ${lead} ${url}${until}`;
+}
+
+/**
+ * The same text without the link itself (Telegram's share URL carries the link separately).
+ * For paper links the instruction stays, ending with a colon: the link follows it.
+ */
+export function buildSignText(args) {
+  const { intro, lead, until } = messageParts(args);
+  return args.method === "scan" ? `${intro}${until} ${lead}` : `${intro}${until}`;
 }

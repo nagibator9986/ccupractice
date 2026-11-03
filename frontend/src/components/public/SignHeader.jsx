@@ -1,4 +1,4 @@
-import { PenLine } from "lucide-react";
+import { PenLine, Printer } from "lucide-react";
 
 // BIN for legal entities, IIN for people; the college recipient can be either.
 export function idLabelFor(role) {
@@ -8,12 +8,14 @@ export function idLabelFor(role) {
 }
 
 /** Compact brand-consistent header: which contract, and in what capacity you sign. */
-export default function SignHeader({ number, roleLabel, recipientName, role, idMasked }) {
+export default function SignHeader({ number, roleLabel, recipientName, role, idMasked, method = "ecp" }) {
+  const paper = method === "scan";
+  const ChipIcon = paper ? Printer : PenLine;
   return (
     <header className="card p-4 sm:p-6 mb-4 sm:mb-5">
       <span className="chip">
-        <PenLine className="h-3 w-3" aria-hidden="true" />
-        Электронное подписание ЭЦП
+        <ChipIcon className="h-3 w-3" aria-hidden="true" />
+        {paper ? "Подписание на бумаге со сканом" : "Электронное подписание ЭЦП"}
       </span>
       <h1 className="mt-3 font-serif text-2xl sm:text-3xl font-bold leading-tight text-charcoal-900">
         Подписание договора практики <span className="whitespace-nowrap">№ {number || "—"}</span>

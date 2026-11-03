@@ -78,6 +78,9 @@ def list_students():
         query = query.filter(group_filter(Student.group_name, group))
     if partner_id:
         query = query.filter(Student.partner_id == partner_id)
+    sign_method = (request.args.get("sign_method") or "").strip().lower()
+    if sign_method in ("ecp", "scan"):
+        query = query.filter(Student.sign_method == sign_method)
     course = parse_int(request.args.get("course"))
     if course:
         query = query.filter(Student.course == course)
@@ -424,6 +427,12 @@ def _apply(student: Student, data: dict, *, skip=()) -> str | None:
         student.birth_date = parse_date(data["birth_date"])
     if "notes" in data:
         student.notes = clean_str(data.get("notes"))
+
+    if "sign_method" in data:
+        method = str(data.get("sign_method") or "ecp").strip().lower()
+        if method not in ("ecp", "scan"):
+            return "Способ подписания: «ecp» (ЭЦП) или «scan» (скан с бумаги)"
+        student.sign_method = method
 
     # Grant flag — gates standalone LMS-contract creation. Accept ints/strings
     # so the front-end can send any truthy form ("1", "true", boolean true).

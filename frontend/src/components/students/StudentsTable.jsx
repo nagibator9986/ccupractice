@@ -1,11 +1,12 @@
 import { useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ExternalLink, FilePlus2, FileText, Pencil, Trash2, TriangleAlert, Plus, GraduationCap } from "lucide-react";
+import { ExternalLink, FilePlus2, FileText, Pencil, Printer, Trash2, TriangleAlert, Plus, GraduationCap, UserRound } from "lucide-react";
 import clsx from "clsx";
 import StatusBadge from "../StatusBadge.jsx";
 import RowActionsMenu from "./RowActionsMenu.jsx";
 import { activeLms, fmtPeriod, groupLabelOf } from "./studentUtils.js";
 import { TONES } from "../../utils/tones.js";
+import { isUnder16 } from "./studentSigning.js";
 
 /* ───────────────────────── small shared pieces ───────────────────────── */
 
@@ -28,6 +29,35 @@ function RowCheckbox({ checked, indeterminate = false, onChange, label }) {
   );
 }
 
+/** «Скан» (signs on paper) and «Представитель» (under 16 — the legal representative signs). */
+function SignChips({ s }) {
+  const paper = s.sign_method === "scan";
+  const rep = isUnder16(s);
+  if (!paper && !rep) return null;
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {rep && (
+        <span
+          className="badge !px-2 !py-0.5 !text-[11px] bg-amber-100 text-amber-800"
+          title="Студент младше 16 лет — договор практики подписывает законный представитель"
+        >
+          <UserRound className="h-3 w-3" aria-hidden="true" />
+          Представитель
+        </span>
+      )}
+      {paper && (
+        <span
+          className="badge !px-2 !py-0.5 !text-[11px] bg-teal-100 text-teal-800"
+          title="Подписывает договор практики на бумаге и загружает скан"
+        >
+          <Printer className="h-3 w-3" aria-hidden="true" />
+          Скан
+        </span>
+      )}
+    </div>
+  );
+}
+
 function NameBlock({ s }) {
   return (
     <div className="min-w-0">
@@ -42,6 +72,7 @@ function NameBlock({ s }) {
           </span>
         )}
       </div>
+      <SignChips s={s} />
     </div>
   );
 }

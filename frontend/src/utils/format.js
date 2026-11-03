@@ -38,7 +38,7 @@ export const CONTRACT_STATUS_META = {
   draft: { label: "Черновик", tone: "slate", icon: "PenLine" },
   generated: { label: "Сформирован", tone: "blue", icon: "FileText" },
   sent: { label: "Отправлен партнеру", tone: "indigo", icon: "Send" },
-  signed: { label: "Подписан (ЭЦП)", tone: "emerald", icon: "BadgeCheck" },
+  signed: { label: "Подписан", tone: "emerald", icon: "BadgeCheck" },
   scan_uploaded: { label: "Скан загружен", tone: "teal", icon: "FileUp" },
   completed: { label: "Завершён", tone: "green", icon: "CircleCheck" },
 };
