@@ -18,7 +18,7 @@ from docxtpl import DocxTemplate
 from flask import current_app
 
 from ..models import Contract, CollegeSettings, Partner, Student
-from ..utils.files import safe_filename, ensure_dir
+from ..utils.files import FILE_PART_MAX_BYTES, FILE_PERSON_MAX_BYTES, ensure_dir, partner_folder_name, safe_filename
 from ..utils.time import utc_today
 from .qr import generate_qr_png, public_verify_url
 
@@ -109,12 +109,14 @@ def _template_path() -> Path:
 
 def _archive_dir(contract: Contract) -> Path:
     base = Path(current_app.config["ARCHIVE_FOLDER"]) / "Профессиональная практика"
-    base = base / str(contract.year) / safe_filename(contract.partner.organization_name) / "Договоры"
+    base = base / str(contract.year) / partner_folder_name(contract.partner.organization_name) / "Договоры"
     return ensure_dir(base)
 
 
 def _archive_filename(contract: Contract, ext: str) -> str:
-    base = f"Договор_практика_{safe_filename(contract.partner.organization_name)}_{safe_filename(contract.student.full_name)}_{contract.year}"
+    org = safe_filename(contract.partner.organization_name, max_bytes=FILE_PART_MAX_BYTES)
+    person = safe_filename(contract.student.full_name, max_bytes=FILE_PERSON_MAX_BYTES)
+    base = f"Договор_практика_{org}_{person}_{contract.year}"
     return f"{base}.{ext}"
 
 

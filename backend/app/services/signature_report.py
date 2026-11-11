@@ -15,7 +15,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from flask import current_app
 
 from ..models import Contract
-from ..utils.files import safe_filename
+from ..utils.files import partner_folder_name, safe_filename
 from ..utils.time import utc_now
 
 
@@ -50,7 +50,7 @@ def _line(doc: Document, label: str, value: str, *, bold=False):
 
 def build_signature_report(contract: Contract) -> Path:
     settings_folder = Path(current_app.config["ARCHIVE_FOLDER"])
-    out_dir = settings_folder / "Профессиональная практика" / str(contract.year) / safe_filename(contract.partner.organization_name) / "Подписи"
+    out_dir = settings_folder / "Профессиональная практика" / str(contract.year) / partner_folder_name(contract.partner.organization_name) / "Подписи"
     out_dir.mkdir(parents=True, exist_ok=True)
     fname = f"Отчёт_подписания_{safe_filename(contract.number)}.docx"
     out_path = out_dir / fname
