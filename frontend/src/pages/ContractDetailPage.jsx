@@ -45,6 +45,7 @@ import SigningParties from "../components/contracts/SigningParties.jsx";
 import ShareLinkModal from "../components/contracts/ShareLinkModal.jsx";
 import BulkLinksModal from "../components/contracts/BulkLinksModal.jsx";
 import DocumentPreviewModal from "../components/contracts/DocumentPreviewModal.jsx";
+import ChangePartnerModal from "../components/contracts/ChangePartnerModal.jsx";
 import { RejectScanModal, ScanViewModal } from "../components/contracts/ScanReviewModal.jsx";
 import { generateInteractive } from "../components/contracts/bulkOps.js";
 import {
@@ -216,6 +217,7 @@ export default function ContractDetailPage() {
   const [scanFile, setScanFile] = useState(null);
   const [notesDraft, setNotesDraft] = useState("");
   const [dateDraft, setDateDraft] = useState("");
+  const [partnerOpen, setPartnerOpen] = useState(false);
 
   // ── loading ─────────────────────────────────────────────────────────────────
   const load = useCallback(
@@ -625,6 +627,17 @@ export default function ContractDetailPage() {
     }
   }
 
+  // The college changed the place of practice: the old document and links are gone, refresh both.
+  function onPartnerChanged(item, warning) {
+    setPartnerOpen(false);
+    setContract(item);
+    load(true);
+    toast(warning || "Предприятие изменено. Сформируйте договор заново.", {
+      icon: <TriangleAlert className="h-4 w-4 text-amber-600" aria-hidden="true" />,
+      duration: 9000,
+    });
+  }
+
   async function uploadScan() {
     if (!scanFile) return;
     if (contract.status === "completed") {
@@ -904,7 +917,20 @@ export default function ContractDetailPage() {
 
             <SectionCard title="Данные договора" icon={Pencil}>
               <div className="grid grid-cols-1 gap-x-6 gap-y-4 text-sm md:grid-cols-2">
-                <InfoRow label="Предприятие">{contract.partner_name}</InfoRow>
+                <InfoRow label="Предприятие">
+                  {contract.partner_name}
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      className="link ml-2 inline-flex items-center gap-1 text-xs font-semibold max-sm:min-h-[44px]"
+                      onClick={() => setPartnerOpen(true)}
+                      disabled={busy}
+                    >
+                      <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                      Изменить
+                    </button>
+                  )}
+                </InfoRow>
                 <InfoRow label="Студент">{contract.student_name}</InfoRow>
                 <InfoRow label="Группа">{contract.student_group}</InfoRow>
                 <InfoRow label="Специальность">{contract.student_specialty}</InfoRow>
@@ -1090,6 +1116,12 @@ export default function ContractDetailPage() {
       <BulkLinksModal result={linksResult} onClose={() => setLinksResult(null)} />
       {isAdmin && (
         <>
+          <ChangePartnerModal
+            open={partnerOpen}
+            contract={contract}
+            onClose={() => setPartnerOpen(false)}
+            onChanged={onPartnerChanged}
+          />
           <ScanViewModal
             request={scanView}
             partyLabel={scanView ? partyOf(scanView) : ""}

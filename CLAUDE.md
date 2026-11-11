@@ -115,6 +115,13 @@ group → generate → send signing links → collect ЭЦП.
   422 `incomplete` unless `allow_incomplete`; bulk creation skips such students and says why.
 - **Guards**: duplicate (student+partner+year) → 409 `duplicate_contract`; deleting or
   re-dating a contract that has signatures/scan → 409 `has_signatures` unless `force`.
+- **Changing the partner of an existing contract** (`PUT /contracts/<id> {partner_id}`,
+  `_change_partner` in `api/contracts.py`, «Изменить» in the contract card): the number stays,
+  generated DOCX/PDF are deleted (they carry the old requisites), status → draft, the student's
+  `partner_id` follows if it pointed at the old partner. Issued links / signatures → 409
+  `has_signatures` unless `force` (same reset as a forced regeneration, `_drop_signing_state`);
+  a `signed_scan_path` → 409 `has_scan` (no force: delete and recreate); same student+partner+year
+  elsewhere → 409 `duplicate_contract` unless `allow_duplicate`.
 - **`Contract.next_action`** (`generate → invite → review_scan → await_signatures → complete → done`) is
   the single definition used by list, card and dashboard — don't re-derive it in the UI.
 - **Bulk**: `POST /contracts/bulk` (dry_run supported; DB only — PDFs are generated one by

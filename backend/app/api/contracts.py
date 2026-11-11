@@ -433,11 +433,114 @@ def bulk_create():
     ), (200 if dry_run or not to_create else 201)
 
 
+def _active_requests(cid: int) -> list[SigningRequest]:
+    return (
+        SigningRequest.query.filter_by(contract_id=cid)
+        .filter(SigningRequest.status.in_(("pending", "viewed", "signed")))
+        .all()
+    )
+
+
+def _drop_signing_state(contract: Contract, active_reqs: list[SigningRequest]) -> None:
+    """Explicit reset so DB state stays consistent with a new/changed document: drop
+    signatures, revoke open/used links, demote the status.
+
+    Any status that coexisted with signatures/active requests (SIGNED, SENT, but also
+    COMPLETED or SCAN_UPLOADED reached via a manual transition or a scan upload while
+    signed) must be demoted once every signature is gone — otherwise the contract is
+    left in a terminal state with an unsigned document and zero signatures. Callers
+    re-promote DRAFT -> GENERATED after generating.
+    """
+    for sig in list(contract.signatures):
+        db.session.delete(sig)
+    for r in active_reqs:
+        r.status = "revoked"
+        r.revoked_at = utc_now()
+        r.signature_id = None
+    contract.status = ContractStatus.DRAFT
+
+
+def _change_partner(contract: Contract, data: dict):
+    """Move the contract to another organisation (the student changed the place of practice
+    after the contract was created). Returns ``(error_response | None, stale_files)``.
+
+    The generated DOCX/PDF carry the old organisation's requisites, so they are discarded and the
+    contract goes back to «Черновик» with the same number — the operator generates it again.
+    Signatures and already issued links belong to that old document: they are refused unless the
+    caller confirms (``force``), exactly like a forced regeneration.
+    """
+    partner = db.session.get(Partner, parse_int(data.get("partner_id")) or 0)
+    if partner is None:
+        return (jsonify(error="Предприятие не найдено", code="partner_not_found"), 404), []
+    if partner.id == contract.partner_id:
+        return None, []
+
+    if contract.signed_scan_path:
+        return (jsonify(
+            error=f"К договору № {contract.number} приложен скан с подписями — менять предприятие нельзя. "
+                  "Удалите договор и создайте новый.",
+            code="has_scan",
+        ), 409), []
+
+    twin = (
+        Contract.query.filter_by(student_id=contract.student_id, partner_id=partner.id, year=contract.year)
+        .filter(Contract.id != contract.id).order_by(Contract.id.desc()).first()
+    )
+    if twin and not data.get("allow_duplicate"):
+        return (jsonify(
+            error=f"У студента с предприятием «{partner.organization_name}» уже есть договор № {twin.number} "
+                  f"за {twin.year} год.",
+            code="duplicate_contract",
+            existing_contract_id=twin.id,
+            existing_contract_number=twin.number,
+        ), 409), []
+
+    active_reqs = _active_requests(contract.id)
+    signed = len(contract.signatures or [])
+    if (signed or active_reqs) and not data.get("force"):
+        return (jsonify(
+            error="По договору уже выданы ссылки на подпись или есть подписи. При смене предприятия они "
+                  "станут недействительными — договор придётся сформировать и подписать заново.",
+            code="has_signatures",
+            signatures_count=signed,
+            links_count=len(active_reqs),
+        ), 409), []
+    if signed or active_reqs:
+        _drop_signing_state(contract, active_reqs)
+
+    archive = Path(current_app.config["ARCHIVE_FOLDER"])
+    stale = [archive / rel for rel in (contract.docx_path, contract.pdf_path) if rel]
+    contract.docx_path = contract.pdf_path = None
+    contract.status = ContractStatus.DRAFT
+
+    # «Место практики» is one fact for the operator: keep the student card in step.
+    student = contract.student
+    if student is not None and student.partner_id in (None, contract.partner_id):
+        student.partner_id = partner.id
+    contract.partner_id = partner.id
+    db.session.flush()
+    db.session.expire(contract, ["partner"])    # the relationship must now load the new organisation
+    return None, stale
+
+
 @bp.put("/<int:cid>")
 @admin_required
 def update_contract(cid):
     contract = Contract.query.get_or_404(cid)
     data = get_json_safe()
+    stale_files: list[Path] = []
+    partner_warning = None
+    if "partner_id" in data:
+        old_partner_id = contract.partner_id
+        err, stale_files = _change_partner(contract, data)
+        if err:
+            db.session.rollback()
+            return err
+        if contract.partner_id != old_partner_id:
+            partner_warning = (
+                f"Предприятие изменено на «{contract.partner.organization_name}». "
+                "Сформируйте договор заново — прежний документ удалён."
+            )
     if "status" in data:
         new_status = data["status"]
         if new_status not in ContractStatus.ALL:
@@ -470,7 +573,13 @@ def update_contract(cid):
             if contract.docx_path:
                 warning = "Дата изменена — пересформируйте договор, чтобы она попала в документ."
     db.session.commit()
-    return jsonify(item=_detail(contract), warning=warning)
+    for path in stale_files:
+        try:
+            if path.is_file():
+                path.unlink()
+        except OSError as exc:
+            current_app.logger.warning("Failed to remove %s: %s", path, exc)
+    return jsonify(item=_detail(contract), warning=warning or partner_warning)
 
 
 @bp.post("/<int:cid>/generate")
@@ -512,23 +621,7 @@ def generate_contract(cid):
             409,
         )
     if force and (has_sigs or active_reqs):
-        # Explicit reset so DB state stays consistent with the new file: drop
-        # signatures, revoke open/used links, demote the status.
-        for s in list(contract.signatures):
-            db.session.delete(s)
-        for r in active_reqs:
-            r.status = "revoked"
-            r.revoked_at = utc_now()
-            r.signature_id = None
-        # Any status that coexisted with signatures/active requests (SIGNED, SENT,
-        # but also COMPLETED or SCAN_UPLOADED reached via a manual transition or a
-        # scan upload while signed) must be demoted now that every signature has
-        # been dropped — otherwise the contract is left in a terminal/"finalized"
-        # state with a brand-new unsigned document and zero signatures. We are
-        # already inside `if force and (has_sigs or active_reqs)`, so a reset
-        # definitely happened; demote unconditionally. Line below re-promotes
-        # DRAFT -> GENERATED so the result is a consistent GENERATED contract.
-        contract.status = ContractStatus.DRAFT
+        _drop_signing_state(contract, active_reqs)
 
     # Front-end origin (sent via axios as X-Public-Origin) is the URL we want
     # the QR-stamp on the generated document to point at.
