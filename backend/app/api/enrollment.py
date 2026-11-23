@@ -33,10 +33,12 @@ from ..services.enrollment_documents import generate_enrollment_files
 from ..services.signature_service import SignatureError, payload_sha256
 from ..services.signature_verification import verify_cms_signature
 from ..utils.auth import admin_required
+from ..utils.section_lock import protect_blueprint
 from ..utils.serializers import clean_str, get_json_safe, parse_date, parse_int
 from ..utils.time import utc_now, utc_today
 
 bp = Blueprint("enrollment", __name__)
+protect_blueprint(bp)    # password-locked section; /public/<token> signing routes stay open
 
 ENROLLMENT_PREFIX = "ОУ"  # «Образовательные услуги»
 

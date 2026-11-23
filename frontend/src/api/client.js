@@ -1,4 +1,5 @@
 import axios from "axios";
+import { SECTION_LOCKED_EVENT, clearSectionToken, getSectionToken } from "../utils/sectionToken.js";
 
 // In production with backend serving the SPA we use a relative `/api` base.
 // When the frontend is hosted on a different origin, set `VITE_API_BASE_URL`
@@ -36,6 +37,9 @@ client.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // Password-protected sections («Договоры со студентами», «LMS-договоры»): harmless elsewhere.
+  const unlock = getSectionToken();
+  if (unlock) config.headers["X-Section-Unlock"] = unlock;
   // Tell the backend which origin to embed in signing URLs (otherwise it would
   // use its own host:port which isn't reachable from the browser).
   if (typeof window !== "undefined") {
@@ -53,6 +57,11 @@ client.interceptors.response.use(
   (error) => {
     const status = error.response?.status;
     const url = error.config?.url || "";
+    // The section password expired or was changed: drop the token, the gate shows the lock screen.
+    if (status === 423 && error.response?.data?.code === "section_locked") {
+      clearSectionToken();
+      if (typeof window !== "undefined") window.dispatchEvent(new Event(SECTION_LOCKED_EVENT));
+    }
     const isPublic = PUBLIC_PATHS.some((p) => url.includes(p));
     // Narrowed to 401 only: a generic 422 from Flask validation, marshmallow,
     // or any other code path should NOT silently log the admin out and hide

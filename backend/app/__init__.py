@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from sqlalchemy import event
 from sqlalchemy.engine import Engine, make_url
 
+from .utils.section_lock import archive_path_needs_unlock, is_unlocked, locked_response
 from .extensions import db, migrate
 
 
@@ -222,6 +223,7 @@ def create_app() -> Flask:
     from .api.verify import bp as verify_bp
     from .api.egov_sign import bp as egov_sign_bp
     from .api.party_scan import bp as party_scan_bp
+    from .api.sections_lock import bp as sections_lock_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(partners_bp, url_prefix="/api/partners")
@@ -238,6 +240,7 @@ def create_app() -> Flask:
     app.register_blueprint(verify_bp, url_prefix="/api/verify")
     app.register_blueprint(egov_sign_bp, url_prefix="/api")
     app.register_blueprint(party_scan_bp, url_prefix="/api")
+    app.register_blueprint(sections_lock_bp, url_prefix="/api/sections-lock")
 
     @app.get("/api/health")
     def health():
@@ -324,6 +327,10 @@ def create_app() -> Flask:
     @app.get("/api/files/archive/<path:filename>")
     @jwt_required()
     def archive_file(filename):
+        # Files of the password-protected sections (договоры со студентами, LMS) live in this
+        # folder too: only the practice folder stays reachable without the section password.
+        if archive_path_needs_unlock(filename) and not is_unlocked():
+            return locked_response()
         return send_from_directory(app.config["ARCHIVE_FOLDER"], filename, as_attachment=True)
 
     @app.get("/api/files/upload/<path:filename>")

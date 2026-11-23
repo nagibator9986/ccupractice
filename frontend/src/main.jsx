@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import App from "./App.jsx";
 import { AuthProvider } from "./context/AuthContext.jsx";
+import { SectionLockProvider } from "./context/SectionLockContext.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import { ConfirmProvider } from "./components/ConfirmDialog.jsx";
 import "./styles.css";
@@ -13,9 +14,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     <ErrorBoundary>
       <BrowserRouter>
         <AuthProvider>
-          <ConfirmProvider>
-            <App />
-          </ConfirmProvider>
+          <SectionLockProvider>
+            <ConfirmProvider>
+              <App />
+            </ConfirmProvider>
+          </SectionLockProvider>
           <Toaster
             position="top-right"
             gutter={8}

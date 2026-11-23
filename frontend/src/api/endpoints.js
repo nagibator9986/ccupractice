@@ -53,6 +53,11 @@ export const authApi = {
     client.post("/auth/change-password", payload).then((r) => r.data),
 };
 
+export const sectionLockApi = {
+  status: () => client.get("/sections-lock").then((r) => r.data),
+  unlock: (password) => client.post("/sections-lock/unlock", { password }).then((r) => r.data),
+};
+
 export const partnersApi = {
   list: (params) => client.get("/partners", { params }).then((r) => r.data),
   get: (id) => client.get(`/partners/${id}`).then((r) => r.data),

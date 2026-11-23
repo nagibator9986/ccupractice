@@ -18,6 +18,7 @@ import LmsContractsPage from "./pages/LmsContractsPage.jsx";
 import LmsContractDetailPage from "./pages/LmsContractDetailPage.jsx";
 import LmsSignPage from "./pages/LmsSignPage.jsx";
 import VerifyPage from "./pages/VerifyPage.jsx";
+import SectionLockGate from "./components/SectionLockGate.jsx";
 import { useAuth } from "./context/AuthContext.jsx";
 
 function ProtectedRoute({ children }) {
@@ -55,10 +56,13 @@ export default function App() {
         <Route path="students" element={<StudentsPage />} />
         <Route path="contracts" element={<ContractsPage />} />
         <Route path="contracts/:id" element={<ContractDetailPage />} />
-        <Route path="enrollments" element={<EnrollmentsPage />} />
-        <Route path="enrollments/:id" element={<EnrollmentDetailPage />} />
-        <Route path="lms-contracts" element={<LmsContractsPage />} />
-        <Route path="lms-contracts/:id" element={<LmsContractDetailPage />} />
+        {/* Password-protected: the server answers 423 without the section password. */}
+        <Route element={<SectionLockGate />}>
+          <Route path="enrollments" element={<EnrollmentsPage />} />
+          <Route path="enrollments/:id" element={<EnrollmentDetailPage />} />
+          <Route path="lms-contracts" element={<LmsContractsPage />} />
+          <Route path="lms-contracts/:id" element={<LmsContractDetailPage />} />
+        </Route>
         <Route path="archive" element={<ArchivePage />} />
         <Route path="data" element={<DataPage />} />
         <Route path="settings" element={<SettingsPage />} />

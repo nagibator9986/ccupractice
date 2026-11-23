@@ -257,6 +257,18 @@ builder and regenerate, or the change is lost on the next rebuild.
   can't `ALTER` in place). Startup applies them automatically.
 - **RBAC**: `role_required` re-checks the live DB user every request, so
   deactivation/demotion take effect immediately.
+- **Password-locked sections** (`utils/section_lock.py`, `api/sections_lock.py`, `SECTIONS_LOCK_PASSWORD`
+  env var — off when empty, the real value lives only in the server environment): «Договоры со
+  студентами» (`/api/enrollments`) and «LMS-договоры» (`/api/lms-contracts`) answer **423
+  `section_locked`** unless the request carries `X-Section-Unlock` — a signed, 8 h token issued by
+  `POST /api/sections-lock/unlock`, bound to the user and to the current password (changing it logs
+  everyone out; 5 wrong tries → 429). Enforced by `protect_blueprint(bp)` (a `before_request`
+  registered at import time in the two modules), which skips the token-scoped `/public/<token>/…`
+  signing routes. `/api/files/archive/<path>` serves anything in the archive, so it checks the
+  NORMALISED path and leaves only the «Профессиональная практика» folder open. Any new route that
+  returns enrollment/LMS data MUST live in those blueprints or call `is_unlocked()`. SPA side:
+  `SectionLockContext` + `SectionLockGate` (route layout) + padlock in the menu; the token is kept
+  in `sessionStorage` (closing the tab locks again).
 - **LmsContract invariants** (grant-only, standalone aggregate — `LmsContract`,
   `/api/lms-contracts`, not a document inside `EnrollmentContract`):
   1. Only a student with `is_grant_student` may have one (`create_lms` → 422

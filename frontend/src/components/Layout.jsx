@@ -8,6 +8,7 @@ import {
   FileSignature,
   GraduationCap,
   LayoutDashboard,
+  Lock,
   LogOut,
   Menu,
   MonitorSmartphone,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { useAuth } from "../context/AuthContext.jsx";
+import { useSectionLock } from "../context/SectionLockContext.jsx";
 import useDialog from "../hooks/useDialog.js";
 import { initials } from "../utils/format.js";
 import BrandLogo from "./BrandLogo.jsx";
@@ -38,9 +40,10 @@ const NAV_SECTIONS = [
   },
   {
     label: "Договоры со студентами",
+    lockable: true, // password-protected: see context/SectionLockContext
     items: [
-      { to: "/enrollments", label: "Договоры со студентами", icon: ScrollText },
-      { to: "/lms-contracts", label: "LMS-договоры", icon: MonitorSmartphone, chip: "Грантники" },
+      { to: "/enrollments", label: "Договоры со студентами", icon: ScrollText, locked: true },
+      { to: "/lms-contracts", label: "LMS-договоры", icon: MonitorSmartphone, chip: "Грантники", locked: true },
     ],
   },
   {
@@ -54,7 +57,11 @@ const NAV_SECTIONS = [
 ];
 
 function NavItem({ item, onNavigate }) {
-  const Icon = item.icon;
+  const { enabled: lockEnabled, unlocked } = useSectionLock();
+  // While the section is locked a padlock takes the place of the item's icon (a lock on the right
+  // would squeeze «LMS-договоры» + the «Грантники» chip out of the sidebar).
+  const showLock = !!item.locked && lockEnabled && !unlocked;
+  const Icon = showLock ? Lock : item.icon;
   return (
     <NavLink
       to={item.to}
@@ -81,9 +88,13 @@ function NavItem({ item, onNavigate }) {
           <Icon
             className={clsx(
               "h-[18px] w-[18px] shrink-0 transition-colors",
-              isActive ? "text-coral-600" : "text-charcoal-400 group-hover:text-charcoal-600",
+              showLock
+                ? "text-coral-600"
+                : isActive
+                  ? "text-coral-600"
+                  : "text-charcoal-400 group-hover:text-charcoal-600",
             )}
-            aria-hidden="true"
+            {...(showLock ? { role: "img", "aria-label": "Раздел закрыт паролем" } : { "aria-hidden": "true" })}
           />
           <span className="truncate">{item.label}</span>
           {item.chip && (
@@ -104,6 +115,7 @@ function NavItem({ item, onNavigate }) {
 
 // Shared by the desktop sidebar and the mobile drawer so the two never drift.
 function SidebarBody({ isAdmin, user, onLogout, onNavigate, onClose }) {
+  const { enabled: lockEnabled, unlocked, lock } = useSectionLock();
   return (
     <>
       <div className="flex items-center justify-between gap-2 px-5 h-16 shrink-0 border-b border-charcoal-100">
@@ -133,6 +145,16 @@ function SidebarBody({ isAdmin, user, onLogout, onNavigate, onClose }) {
                 {items.map((n) => (
                   <NavItem key={n.to} item={n} onNavigate={onNavigate} />
                 ))}
+                {section.lockable && lockEnabled && unlocked && (
+                  <button
+                    type="button"
+                    onClick={lock}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 min-h-[44px] lg:min-h-[32px] text-xs font-medium text-charcoal-500 hover:bg-charcoal-50 hover:text-coral-700"
+                  >
+                    <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    Закрыть разделы паролем
+                  </button>
+                )}
               </div>
             </div>
           );
