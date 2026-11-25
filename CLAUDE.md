@@ -175,6 +175,10 @@ each document with `docxtpl`, converts to PDF via LibreOffice (`soffice`,
 isolated profile per call), and keeps the archive consistent (deletes stale PDFs
 before reconversion; rolls back files on a mid-batch failure).
 
+**Always render with `tpl.render(context, autoescape=True)`** (all three generators do). docxtpl
+defaults to no escaping, so a name like `ТОО «Fun&Sun "FOUR SEASONS"»` or an address with `<`/`&` breaks
+the XML and Word silently drops the text after the `&` — no error is raised.
+
 ### How to add or change a document
 
 1. Put the pristine `.docx` in `templates_docx/source/`.

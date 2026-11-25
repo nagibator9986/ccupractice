@@ -104,6 +104,43 @@ class GenerationFlowTests(AppTestCase):
             for part in report.parts[-4:]:
                 self.assertLessEqual(len(part.encode("utf-8")), 255, part)
 
+    def test_ampersand_and_angle_brackets_in_names_survive_in_the_document(self):
+        """Regression: «ТОО «Fun&Sun "FOUR SEASONS"»» came out as «Fun "FOUR SEASONS"» — the unescaped `&`
+        broke the XML and Word silently dropped «&Sun»."""
+        from pathlib import Path
+
+        from docx import Document
+
+        from app.extensions import db
+        from app.models import Contract, Partner, Student
+
+        org = 'ТОО «Fun&Sun "FOUR SEASONS"»'
+        address = "г. Алматы, мкр. Аксай 4, оф. 70Б & 71 <корпус 2>"
+        with self.app.app_context():
+            p = Partner(organization_name=org, bin="230740028478", legal_address=address,
+                        director_full_name="Копанова Асель Сергеевна", director_position="Директор")
+            s = Student(full_name="Токанова Азима Азаматовна", iin=self.make_iin(serial="0077"), group_name="ТР 24-1",
+                        specialty="Туризм", practice_start=date(2026, 11, 2), practice_end=date(2027, 1, 16))
+            db.session.add_all([p, s])
+            db.session.commit()
+            pid, sid = p.id, s.id
+
+        cid = self.client.post("/api/contracts", json={"student_id": sid, "partner_id": pid},
+                               headers=self.admin).get_json()["item"]["id"]
+        gen = self.client.post(f"/api/contracts/{cid}/generate", json={}, headers=self.admin)
+        self.assertEqual(gen.status_code, 200, gen.get_json())
+
+        with self.app.app_context():
+            contract = db.session.get(Contract, cid)
+            archive = Path(self.app.config["ARCHIVE_FOLDER"])
+            doc = Document(str(archive / contract.docx_path))
+            text = "\n".join(
+                [p_.text for p_ in doc.paragraphs]
+                + [c.text for t in doc.tables for row in t.rows for c in row.cells]
+            )
+            self.assertIn(org, text)
+            self.assertIn(address, text)
+
 
 if __name__ == "__main__":
     unittest.main()

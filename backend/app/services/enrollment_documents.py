@@ -193,7 +193,7 @@ def _render_one(e: EnrollmentContract, document: str, template_path: Path,
     docx_full = archive_dir / docx_name
 
     tpl = DocxTemplate(str(template_path))
-    tpl.render(context)
+    tpl.render(context, autoescape=True)  # `&` / `<` in a name must not break the XML
     tpl.save(str(docx_full))
     if written is not None:
         written.append(docx_full)

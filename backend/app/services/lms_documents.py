@@ -297,7 +297,7 @@ def generate_lms_files(
     written: list[Path] = []
     try:
         tpl = DocxTemplate(str(template_path))
-        tpl.render(context)
+        tpl.render(context, autoescape=True)  # `&` / `<` in a name must not break the XML
         tpl.save(str(docx_full))
         written.append(docx_full)
 

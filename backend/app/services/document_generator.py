@@ -371,7 +371,8 @@ def generate_contract_files(contract: Contract, *, public_base: str | None = Non
     docx_full = archive_dir / docx_name
 
     tpl = DocxTemplate(str(template))
-    tpl.render(_build_context(contract))
+    # autoescape: without it a name like «Fun&Sun» breaks the XML and Word silently drops «&Sun».
+    tpl.render(_build_context(contract), autoescape=True)
     tpl.save(str(docx_full))
 
     # Embed verification stamp on every page + final QR block — this rewrites
